@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenJobs | Elite Data Ledger</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:ital,wght@0,300..900;1,300..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Fixed Background Grid -->
+    <div class="fixed-grid-overlay"></div>
+
+    <div class="app-container">
+        
+        <!-- Top Status Bar -->
+        <header class="app-header-bar">
+            <div class="header-logo">
+                <span class="logo-main">OPEN_JOBS</span>
+                <span class="logo-sub">// DATA_LEDGER.v1</span>
+            </div>
+            <div class="header-metrics">
+                <div class="metric-block">
+                    <span class="metric-label">TOTAL INDEXED:</span>
+                    <span id="stat-total-jobs" class="metric-value">0</span>
+                </div>
+                <div class="metric-block">
+                    <span class="metric-label">MATCHED:</span>
+                    <span id="results-count" class="metric-value gold-glowing-text">0</span>
+                </div>
+                <div class="metric-block">
+                    <span class="metric-label">LAST SCRAPE:</span>
+                    <span id="stat-last-updated" class="metric-value">...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Search Bar Section with Dual-Mode Tabs -->
+        <section class="search-section">
+            <div class="search-tabs-header" role="tablist">
+                <button id="tab-free" class="search-tab active" role="tab" aria-selected="true" aria-controls="search-free-panel">
+                    [ FREE TEXT ]
+                </button>
+                <button id="tab-structured" class="search-tab" role="tab" aria-selected="false" aria-controls="search-structured-panel">
+                    [ STRUCTURED ]
+                </button>
+            </div>
+            
+            <div class="search-panels-container">
+                <!-- Free Text Panel -->
+                <div id="search-free-panel" class="search-panel active" role="tabpanel">
+                    <input type="text" id="input-free-search" class="search-input-field" placeholder="Type search query (e.g. title:&quot;Staff&quot; company:&quot;Figma&quot; remote)...">
+                </div>
+                
+                <!-- Structured Panel -->
+                <div id="search-structured-panel" class="search-panel" role="tabpanel">
+                    <div class="structured-inputs-row">
+                        <div class="structured-field">
+                            <label for="input-struct-title" class="struct-label">TITLE</label>
+                            <input type="text" id="input-struct-title" class="search-input-field compact" placeholder="e.g. Engineer">
+                        </div>
+                        <div class="structured-field">
+                            <label for="input-struct-company" class="struct-label">COMPANY</label>
+                            <input type="text" id="input-struct-company" class="search-input-field compact" placeholder="e.g. Reddit">
+                        </div>
+                        <div class="structured-field">
+                            <label for="input-struct-location" class="struct-label">LOCATION</label>
+                            <input type="text" id="input-struct-location" class="search-input-field compact" placeholder="e.g. San Francisco">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Dashboard Split Screen -->
+        <div class="dashboard-split">
+            
+            <!-- Persistent Left Sidebar Filters -->
+            <aside class="dashboard-sidebar">
+                
+                <!-- Active Filters Strip -->
+                <div class="active-filters-box hidden" id="active-filters-box">
+                    <div class="sidebar-heading">ACTIVE_FILTERS</div>
+                    <div class="active-chips-container" id="active-chips"></div>
+                    <button class="clear-all-btn" id="btn-clear-all">[ CLEAR ALL ]</button>
+                </div>
+
+                <!-- Accordions -->
+                <!-- Workplace -->
+                <div class="filter-accordion">
+                    <button class="accordion-header" aria-expanded="true" data-target="acc-workplace">
+                        <span>WORKPLACE</span>
+                        <span class="acc-indicator">[–]</span>
+                    </button>
+                    <div id="acc-workplace" class="accordion-body open">
+                        <label class="filter-checkbox-row">
+                            <input type="checkbox" value="remote" data-facet="workplace">
+                            <span class="checkbox-visual"></span>
+                            <span class="checkbox-label">REMOTE</span>
+                            <span class="facet-count" id="count-workplace-remote">0</span>
+                        </label>
+                        <label class="filter-checkbox-row">
+                            <input type="checkbox" value="onsite" data-facet="workplace">
+                            <span class="checkbox-visual"></span>
+                            <span class="checkbox-label">ON-SITE</span>
+                            <span class="facet-count" id="count-workplace-onsite">0</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Posted -->
+                <div class="filter-accordion">
+                    <button class="accordion-header" aria-expanded="true" data-target="acc-posted">
+                        <span>POSTED</span>
+                        <span class="acc-indicator">[–]</span>
+                    </button>
+                    <div id="acc-posted" class="accordion-body open">
+                        <label class="filter-checkbox-row">
+                            <input type="checkbox" value="24h" data-facet="posted">
+                            <span class="checkbox-visual"></span>
+                            <span class="checkbox-label">WITHIN 24 HOURS</span>
+                            <span class="facet-count" id="count-posted-24h">0</span>
+                        </label>
+                        <label class="filter-checkbox-row">
+                            <input type="checkbox" value="3d" data-facet="posted">
+                            <span class="checkbox-visual"></span>
+                            <span class="checkbox-label">WITHIN 3 DAYS</span>
+                            <span class="facet-count" id="count-posted-3d">0</span>
+                        </label>
+                        <label class="filter-checkbox-row">
+                            <input type="checkbox" value="7d" data-facet="posted">
+                            <span class="checkbox-visual"></span>
+                            <span class="checkbox-label">WITHIN 7 DAYS</span>
+                            <span class="facet-count" id="count-posted-7d">0</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Level -->
+                <div class="filter-accordion">
+                    <button class="accordion-header" aria-expanded="true" data-target="acc-level">
+                        <span>LEVEL</span>
+                        <span class="acc-indicator">[–]</span>
+                    </button>
+                    <div id="acc-level" class="accordion-body open">
+                        <label class="filter-checkbox-row">
+                            <input type="checkbox" value="entry" data-facet="level">
+                            <span class="checkbox-visual"></span>
+                            <span class="checkbox-label">ENTRY</span>
+                            <span class="facet-count" id="count-level-entry">0</span>
+                        </label>
+                        <label class="filter-checkbox-row">
+                            <input type="checkbox" value="mid" data-facet="level">
+                            <span class="checkbox-visual"></span>
+                            <span class="checkbox-label">MID</span>
+                            <span class="facet-count" id="count-level-mid">0</span>
+                        </label>
+                        <label class="filter-checkbox-row">
+                            <input type="checkbox" value="senior" data-facet="level">
+                            <span class="checkbox-visual"></span>
+                            <span class="checkbox-label">SENIOR</span>
+                            <span class="facet-count" id="count-level-senior">0</span>
+                        </label>
+                        <label class="filter-checkbox-row">
+                            <input type="checkbox" value="executive" data-facet="level">
+                            <span class="checkbox-visual"></span>
+                            <span class="checkbox-label">EXECUTIVE</span>
+                            <span class="facet-count" id="count-level-executive">0</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Min Comp -->
+                <div class="filter-accordion">
+                    <button class="accordion-header" aria-expanded="true" data-target="acc-comp">
+                        <span>MIN COMP</span>
+                        <span class="acc-indicator">[–]</span>
+                    </button>
+                    <div id="acc-comp" class="accordion-body open">
+                        <div class="comp-stepper-container">
+                            <button id="btn-comp-minus" class="comp-stepper-btn" aria-label="Decrease min compensation">–</button>
+                            <span id="comp-display" class="comp-display-value">$0k</span>
+                            <button id="btn-comp-plus" class="comp-stepper-btn" aria-label="Increase min compensation">+</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ATS -->
+                <div class="filter-accordion">
+                    <button class="accordion-header" aria-expanded="true" data-target="acc-ats">
+                        <span>ATS</span>
+                        <span class="acc-indicator">[–]</span>
+                    </button>
+                    <div id="acc-ats" class="accordion-body open">
+                        <label class="filter-checkbox-row">
+                            <input type="checkbox" value="greenhouse" data-facet="ats">
+                            <span class="checkbox-visual"></span>
+                            <span class="checkbox-label">GREENHOUSE</span>
+                            <span class="facet-count" id="count-ats-greenhouse">0</span>
+                        </label>
+                        <label class="filter-checkbox-row">
+                            <input type="checkbox" value="lever" data-facet="ats">
+                            <span class="checkbox-visual"></span>
+                            <span class="checkbox-label">LEVER</span>
+                            <span class="facet-count" id="count-ats-lever">0</span>
+                        </label>
+                        <label class="filter-checkbox-row">
+                            <input type="checkbox" value="workday" data-facet="ats">
+                            <span class="checkbox-visual"></span>
+                            <span class="checkbox-label">WORKDAY</span>
+                            <span class="facet-count" id="count-ats-workday">0</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Status & Personal toggles -->
+                <div class="filter-accordion">
+                    <button class="accordion-header" aria-expanded="true" data-target="acc-status">
+                        <span>STATUS & PERSONAL</span>
+                        <span class="acc-indicator">[–]</span>
+                    </button>
+                    <div id="acc-status" class="accordion-body open">
+                        <div class="toggle-row">
+                            <span class="toggle-label">HIDE RECRUITER POSTS</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle-hide-recruiters">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">VERIFIED (HIDE STALE)</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle-hide-stale">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">SHOW SAVED ONLY</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle-saved-only">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">SHOW APPLIED ONLY</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle-applied-only">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">SHOW IGNORED</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle-show-ignored">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+            </aside>
+
+            <!-- Compact Tabular Data Ledger -->
+            <main class="ledger-container">
+                
+                <!-- Sort Header Grid -->
+                <div class="ledger-header-grid">
+                    <button class="sort-header-col active" data-sort="role">
+                        ROLE <span class="sort-chevron" id="sort-role-chev">▲</span>
+                    </button>
+                    <button class="sort-header-col" data-sort="location">
+                        LOCATION <span class="sort-chevron" id="sort-location-chev"></span>
+                    </button>
+                    <button class="sort-header-col" data-sort="level">
+                        LEVEL <span class="sort-chevron" id="sort-level-chev"></span>
+                    </button>
+                    <button class="sort-header-col" data-sort="posted">
+                        POSTED <span class="sort-chevron" id="sort-posted-chev"></span>
+                    </button>
+                    <div class="sort-header-col actions-header">ACTIONS</div>
+                </div>
+
+                <!-- Ledger Body -->
+                <div id="loader" class="ledger-loader">
+                    <span class="loader-pulse">■</span> REHYDRATING LEDGER DATABASES...
+                </div>
+
+                <div id="ledger-rows" class="ledger-rows-wrapper hidden">
+                    <!-- Dynamic Compact Rows go here -->
+                </div>
+
+                <!-- Pagination Footer -->
+                <footer class="ledger-footer" id="pagination-controls">
+                    <button id="btn-prev" class="ledger-page-btn" disabled>[ PREVIOUS ]</button>
+                    <div id="page-indicator" class="ledger-page-indicator">01 / 01</div>
+                    <button id="btn-next" class="ledger-page-btn">[ NEXT ]</button>
+                </footer>
+
+            </main>
+
+        </div>
+    </div>
+    
+    <script src="app.js" type="module"></script>
+</body>
+</html>

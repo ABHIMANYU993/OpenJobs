@@ -1,0 +1,95 @@
+# ADR-0010: Phase plan with mandatory adversarial audit gates
+
+## Status
+
+Accepted
+
+## Context
+
+The roadmap from initial scaffold to first deploy is large enough that "ship in one big push" would invite quality and security regressions. We want a phased plan with explicit checkpoints, and we want each checkpoint validated by a reader who has not been in the trenches.
+
+Self-review is biased toward what was just written; an outside reviewer reading the code cold catches the things the author has stopped seeing. Code review is most useful when the reviewer is unfamiliar.
+
+## Decision
+
+The implementation is sequenced into seven phases. **Each phase ends with a mandatory adversarial code review by a fresh outside reviewer** before the next phase can begin.
+
+### Phases
+
+| Phase | Goal | Estimated effort |
+|---|---|---|
+| 1 | Foundations: workspaces, configs, hooks, CI scaffold, ADRs, specs | 1 day |
+| 2 | ATS scrapers: six parsers with fixture-replay tests | 2–3 days |
+| 3 | Classifiers + DB build: level/recruiter classifiers, schema migrations, FTS5 | 1 day |
+| 4 | Astro site, mobile-first: filter UI, per-tenant pages, RSS feeds | 3 days |
+| 5 | Common Crawl harvester: tenant-list discovery + liveness probe | 2–3 days |
+| 6 | Anti-bot driver for session-locked tenants | (deferred until needed) |
+| 7 | Quality + observability: drift detector, dead-tenant alerts, run reports, mutation testing | 0.5 day |
+| 8 | Client-side query runtime: sql.js-httpvfs Worker, results rendering, hydration-verifying e2e | 0.5 day |
+| 9 | ATS breadth: widen the supported set from 6 to 12 (adds recruitee, breezy, personio, workable, teamtailor, smartrecruiters) — schema migration, harvest patterns, probes, and minimal scrapers for the 4 highest-volume additions | 1 day |
+| 10 | ATS long-tail: widen further from 12 to 24 (adds csod, taleo, ultipro, jobvite, zohorecruit, talentlyft, pinpointhq, applicantpro, applicantstack, homerun, factorial, eightfold) — harvest patterns and probes for all twelve, scrapers progress per follow-up commits as fixture-replay tests land. Empirical CC-MAIN-2026-12 sweep validated each addition with ≥ 47 distinct hosts. | 1 day |
+| 11 | Brutalist Press visual theme: locked palette / type / density spec, base layout + masthead, FilterTable restyle, four UI mechanisms (active-filter chip strip, numbered pager, desktop sortable-column table grid, mobile FAB drawer with focus trap), property-tested helpers (`pagesToShow`, `sanitizeChipLabel`), accessibility-first contrast and tap-target enforcement | 1.5 days |
+| 12 | Role lifecycle: previous-DB carry-forward in `build-db`, `is_stale` column + 3-day TTL drop window, `first_seen_at` honestly preserved, `fresh_count`/`stale_count`/`stale_ttl_days` on the manifest, `STALE · ND` muted-state badge + dim row + `+ Verified only` filter chip on the front-end. Spec: `specs/role-lifecycle.md` v1.0.0. | 0.5 day |
+| 13 | Search modifiers + saved-job sub-views: `field:value` parser (title / company / description / location) with quoted phrases and AND-joined multi-term, fast-check property tests for FTS5 + LIKE injection safety; `+ Saved` / `+ Applied` / `+ Ignored` mutually-exclusive toggles backed by an `idAllowlist` SQL parameter. Spec: `specs/filter-ui.md` v1.2.0. | 0.5 day |
+
+> [!NOTE]
+> **Phases beyond 13 are no longer tracked here.** The phase-plan
+> framework served the bootstrap-through-first-deploy arc of the
+> project. Decisions made after Phase 13 land as ADRs (see
+> [ADR-0011](0011-incremental-harvest-and-reprobe.md),
+> [ADR-0012](0012-static-only-deployment.md),
+> [ADR-0013](0013-no-subscription-model.md),
+> [ADR-0014](0014-filter-information-architecture.md)) rather than
+> additional rows in the table above. The audit-gate cadence below
+> remains the project's standard: new feature work runs through the
+> same red→green→refactor→adversarial-review rhythm.
+
+**Mutation testing in Phase 7 is deferred** — the established mutation-testing harnesses (StrykerJS) do not yet have first-class Bun support and run only against Node, requiring a parallel test harness. The unit-test suite already has property tests for every classifier and parser, schema-validation round-trips for every on-disk shape, and adversarial-audit gates per phase, which substantively cover the same defect-detection surface. We will revisit when StrykerJS adds Bun coverage natively or when a Bun-native mutator ships.
+
+Within each phase, the rhythm is: write a failing test → implement → cover → integrate → audit gate → merge.
+
+### Audit gate
+
+At the end of each phase:
+
+1. A fresh reviewer (no shared context with the phase author) is engaged.
+2. The reviewer reads the code as a hostile outside party would. The reviewer's prompt includes the explicit checks below.
+3. The reviewer returns a categorized issue list: Critical, Major, Minor.
+4. **Critical and Major findings remediate before the next phase begins.** Minor findings are filed as tracked TODOs.
+5. The phase is not "done" until the audit passes.
+
+### Audit checks (mandatory, per phase)
+
+- **Quality** — naming, dead code, duplicated logic, unjustified abstractions, type-safety holes.
+- **Testing completeness** — per-file coverage thresholds met, missing edge cases, missing property tests, fixture realism.
+- **Correctness** — off-by-one, race conditions, unhandled errors, retry storms, regex catastrophic backtracking.
+- **Security** — injection (SQL, shell, regex, prototype), unbounded input, SSRF, secret leakage, dependency CVEs.
+- **Accessibility** (UI phases) — WCAG 2.1 AA, ARIA, color-contrast, keyboard navigation, screen-reader semantics.
+- **Performance** — N+1 queries, missing indexes, unbounded memory, blocking I/O on critical paths, bundle-size regressions.
+- **Documentation** — ADRs current, specs cover new features, CHANGELOG entry for the phase, README freshness.
+- **Completeness vs phase plan** — phase deliverables actually shipped, no half-finished modules, no `TODO`/`FIXME` left without ticket links.
+
+## Consequences
+
+### Positive
+
+- Quality stays high throughout, not just at the start.
+- Outside-reviewer audits catch what the author has stopped seeing.
+- Phase boundaries are explicit checkpoints, useful for scope control and time budgeting.
+- The audit transcript becomes part of the project's record; future contributors can see what was caught.
+
+### Neutral
+
+- Each audit costs reviewer time. We accept that as the price of the discipline.
+- The phase boundaries are guidelines, not rigid; if a phase needs more or less time, we adjust the plan rather than the gate.
+
+### Negative
+
+- The audit gate adds a synchronization point at each phase boundary; "almost done" cannot bypass it.
+- A failing audit may delay a phase by hours or days while remediation happens. We accept that delay as preferable to compounding latent issues into later phases.
+
+## Alternatives considered
+
+- **No phase audits, just self-review** — works for small projects; for the breadth of this codebase the bias risk is too high.
+- **Audit only at the end** — defers feedback until the cost of remediation is highest. Phase audits find issues while context is still fresh.
+- **PR review only** — PR reviews focus on diffs; phase audits read the whole phase output as a coherent thing. Both belong; phase audits supplement, not replace, PR review.

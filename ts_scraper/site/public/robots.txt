@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+
+# Job database is a binary blob; crawlers don't get useful results paging it.
+Disallow: /data/
+
+# Hostname must match site/src/lib/site-config.ts SITE_ORIGIN.
+Sitemap: https://job_filters.today/sitemap-index.xml

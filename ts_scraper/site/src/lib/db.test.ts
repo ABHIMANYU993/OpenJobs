@@ -1,0 +1,307 @@
+import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type Job, jobId } from "@job_filters/shared";
+import {
+  FTS_OPTIMIZE_STMT,
+  INDEX_DDL,
+  PAGE_SIZE_PRAGMA,
+  SCHEMA_DDL,
+  VACUUM_STMT,
+} from "../../../scraper/src/db/schema.ts";
+import { dataDirIsPopulated, openSiteDb, selectFirstPaintJobs, selectTenants } from "./db.ts";
+
+const OBSERVED_AT = "2026-04-26T00:00:00Z";
+
+function makeJob(overrides: Partial<Job> = {}): Job {
+  const base = {
+    ats: "greenhouse" as const,
+    tenant_slug: "stripe",
+    source_id: "1",
+    title: "Senior Software Engineer",
+    company: "Stripe",
+    url: "https://example.com/1",
+  };
+  const m = { ...base, ...overrides };
+  return {
+    id: jobId({ ats: m.ats, tenant_slug: m.tenant_slug, source_id: m.source_id, url: m.url }),
+    ats: m.ats,
+    tenant_slug: m.tenant_slug,
+    source_id: m.source_id,
+    title: m.title,
+    company: m.company,
+    level: null,
+    level_rank: null,
+    workplace_type: null,
+    is_recruiter_post: false,
+    first_seen_at: OBSERVED_AT,
+    last_seen_at: OBSERVED_AT,
+    url: m.url,
+    ...overrides,
+  };
+}
+
+const dbs: Database[] = [];
+afterEach(() => {
+  for (const d of dbs) d.close();
+  dbs.length = 0;
+});
+
+function fresh(
+  jobs: Job[],
+  tenants: Array<{ ats: string; slug: string; status?: string }> = [],
+): Database {
+  const db = new Database(":memory:");
+  db.exec(PAGE_SIZE_PRAGMA);
+  db.exec(SCHEMA_DDL);
+  db.exec(INDEX_DDL);
+  const insertJob = db.prepare(
+    "INSERT INTO jobs (id, ats, tenant_slug, source_id, title, company, level, level_rank, workplace_type, is_recruiter_post, posted_at, first_seen_at, last_seen_at, url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+  );
+  for (const j of jobs) {
+    insertJob.run(
+      j.id,
+      j.ats,
+      j.tenant_slug,
+      j.source_id,
+      j.title,
+      j.company,
+      j.level,
+      j.level_rank,
+      j.workplace_type,
+      j.is_recruiter_post ? 1 : 0,
+      j.posted_at ?? null,
+      j.first_seen_at,
+      j.last_seen_at,
+      j.url,
+    );
+  }
+  const insertTenant = db.prepare(
+    "INSERT INTO tenants (ats, slug, status, last_probed_at) VALUES (?, ?, ?, ?)",
+  );
+  for (const t of tenants) {
+    insertTenant.run(t.ats, t.slug, t.status ?? "live", OBSERVED_AT);
+  }
+  db.exec(VACUUM_STMT);
+  db.exec(FTS_OPTIMIZE_STMT);
+  dbs.push(db);
+  return db;
+}
+
+describe("selectTenants", () => {
+  it("aggregates tenant + job_count, dropping tenants with no jobs", () => {
+    // The "lonely" tenant has zero jobs in the build's SQLite — its
+    // page would be empty (no SEO value, no user value), and at
+    // 119k+ post-bootstrap tenants the per-tenant Astro build time
+    // adds ~13ms each. selectTenants now filters out zero-job
+    // tenants via HAVING job_count > 0 so the static-site build
+    // stays under the CI cap. See specs/role-detail.md history.
+    const db = fresh(
+      [
+        makeJob({ source_id: "1", url: "https://example.com/1", tenant_slug: "stripe" }),
+        makeJob({ source_id: "2", url: "https://example.com/2", tenant_slug: "stripe" }),
+        makeJob({
+          source_id: "3",
+          url: "https://example.com/3",
+          tenant_slug: "anthropic",
+          ats: "lever",
+        }),
+      ],
+      [
+        { ats: "greenhouse", slug: "stripe" },
+        { ats: "lever", slug: "anthropic" },
+        { ats: "ashby", slug: "lonely" },
+      ],
+    );
+    const rows = selectTenants(db);
+    expect(rows).toHaveLength(2);
+    const stripe = rows.find((r) => r.slug === "stripe");
+    expect(stripe?.job_count).toBe(2);
+    expect(rows.find((r) => r.slug === "lonely")).toBeUndefined();
+  });
+});
+
+describe("selectFirstPaintJobs", () => {
+  it("returns rows sorted by posted_at DESC NULLS LAST, capped at limit", () => {
+    const db = fresh([
+      makeJob({
+        source_id: "1",
+        url: "https://example.com/1",
+        posted_at: "2026-04-25T00:00:00Z",
+      }),
+      makeJob({
+        source_id: "2",
+        url: "https://example.com/2",
+        posted_at: "2026-04-26T00:00:00Z",
+      }),
+      makeJob({
+        source_id: "3",
+        url: "https://example.com/3",
+        posted_at: null, // sorts to end
+      }),
+      makeJob({
+        source_id: "4",
+        url: "https://example.com/4",
+        posted_at: "2026-04-24T00:00:00Z",
+      }),
+    ]);
+    const rows = selectFirstPaintJobs(db, 50);
+    expect(rows).toHaveLength(4);
+    expect(rows[0]?.posted_at).toBe("2026-04-26T00:00:00Z");
+    expect(rows[1]?.posted_at).toBe("2026-04-25T00:00:00Z");
+    expect(rows[2]?.posted_at).toBe("2026-04-24T00:00:00Z");
+    expect(rows[3]?.posted_at).toBeNull();
+  });
+
+  it("respects the limit", () => {
+    const db = fresh(
+      Array.from({ length: 10 }, (_, i) =>
+        makeJob({
+          source_id: String(i),
+          url: `https://example.com/${i}`,
+          posted_at: `2026-04-${String(10 + i).padStart(2, "0")}T00:00:00Z`,
+        }),
+      ),
+    );
+    const rows = selectFirstPaintJobs(db, 3);
+    expect(rows).toHaveLength(3);
+  });
+
+  it("emits the slim shape with short_id (first 16 hex chars of full id) + url", () => {
+    const db = fresh([
+      makeJob({
+        source_id: "abc",
+        url: "https://example.com/abc",
+        posted_at: "2026-04-26T00:00:00Z",
+      }),
+    ]);
+    const rows = selectFirstPaintJobs(db, 50);
+    expect(rows[0]?.short_id).toMatch(/^[0-9a-f]{16}$/);
+    expect(rows[0]?.is_recruiter_post).toBe(false);
+    expect(rows[0]?.is_stale).toBe(false);
+    // ADR-0012: url is now exposed in the first-paint shape (the row's
+    // primary action target). description_excerpt was dropped from the
+    // schema entirely.
+    expect(rows[0]?.url).toBe("https://example.com/abc");
+    expect(rows[0]).not.toHaveProperty("description_excerpt");
+  });
+
+  it("converts SQLite 0/1 integer flags to booleans", () => {
+    const db = fresh([
+      makeJob({
+        source_id: "rec",
+        url: "https://example.com/rec",
+        posted_at: "2026-04-26T00:00:00Z",
+        is_recruiter_post: true,
+      }),
+    ]);
+    const rows = selectFirstPaintJobs(db, 50);
+    expect(rows[0]?.is_recruiter_post).toBe(true);
+  });
+});
+
+describe("openSiteDb / dataDirIsPopulated", () => {
+  it("returns false when the directory does not exist", () => {
+    expect(dataDirIsPopulated("/tmp/job_filters-does-not-exist-xyz")).toBe(false);
+  });
+
+  it("returns false when the manifest is missing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "job_filters-db-"));
+    expect(dataDirIsPopulated(dir)).toBe(false);
+  });
+
+  it("opens a real on-disk db via the manifest", () => {
+    const dir = mkdtempSync(join(tmpdir(), "job_filters-db-"));
+    const dbPath = join(dir, "jobs.abc1234.sqlite");
+    const db = new Database(dbPath);
+    db.exec(PAGE_SIZE_PRAGMA);
+    db.exec(SCHEMA_DDL);
+    db.close();
+    writeFileSync(
+      join(dir, "manifest.json"),
+      JSON.stringify({
+        schema_version: "1.0.0",
+        built_at: OBSERVED_AT,
+        short_sha: "abc1234",
+        db_filename: "jobs.abc1234.sqlite",
+        total_rows: 0,
+        ats_counts: {
+          greenhouse: 0,
+          lever: 0,
+          ashby: 0,
+          bamboohr: 0,
+          workday: 0,
+          icims: 0,
+        },
+        tenants_total: 0,
+        tenants_live: 0,
+      }),
+    );
+    expect(dataDirIsPopulated(dir)).toBe(true);
+    const site = openSiteDb(dir);
+    expect(site.manifest.short_sha).toBe("abc1234");
+    site.close();
+  });
+
+  it("throws when manifest references a missing sqlite file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "job_filters-db-"));
+    writeFileSync(
+      join(dir, "manifest.json"),
+      JSON.stringify({
+        schema_version: "1.0.0",
+        built_at: OBSERVED_AT,
+        short_sha: "abc1234",
+        db_filename: "jobs.does-not-exist.sqlite",
+        total_rows: 0,
+        ats_counts: {
+          greenhouse: 0,
+          lever: 0,
+          ashby: 0,
+          bamboohr: 0,
+          workday: 0,
+          icims: 0,
+        },
+        tenants_total: 0,
+        tenants_live: 0,
+      }),
+    );
+    expect(() => openSiteDb(dir)).toThrow();
+  });
+
+  it("throws when the data dir has no manifest", () => {
+    const dir = mkdtempSync(join(tmpdir(), "job_filters-db-"));
+    expect(() => openSiteDb(dir)).toThrow();
+  });
+
+  it("uses OPENROLES_DATA_DIR when set (defaultDataDir env branch)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "job_filters-default-dir-"));
+    const prev = process.env["OPENROLES_DATA_DIR"];
+    process.env["OPENROLES_DATA_DIR"] = dir;
+    try {
+      // No manifest in the dir, so openSiteDb throws — but the env-var
+      // branch of defaultDataDir() runs en route to the throw, which is
+      // what this test exercises.
+      expect(() => openSiteDb()).toThrow(/manifest\.json not found/);
+    } finally {
+      if (prev === undefined) delete process.env["OPENROLES_DATA_DIR"];
+      else process.env["OPENROLES_DATA_DIR"] = prev;
+    }
+  });
+
+  it("falls through to ./data when no env and no public/data manifest (defaultDataDir final return)", () => {
+    const prev = process.env["OPENROLES_DATA_DIR"];
+    delete process.env["OPENROLES_DATA_DIR"];
+    try {
+      // Both branches resolve to a relative path that almost certainly
+      // doesn't have a manifest in the test runner's CWD; we only care
+      // that defaultDataDir() returned a string and openSiteDb attempted
+      // to read it. Both possible final values ("./public/data" or
+      // "./data") fail the manifest.json existsSync check identically.
+      expect(() => openSiteDb()).toThrow(/manifest\.json not found/);
+    } finally {
+      if (prev !== undefined) process.env["OPENROLES_DATA_DIR"] = prev;
+    }
+  });
+});

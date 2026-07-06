@@ -1,0 +1,70 @@
+[
+  {
+    "ats": "successfactors",
+    "slug": "sap",
+    "display_name": "SAP",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:56:29.684Z",
+    "first_seen_at": "2026-05-14T01:25:59.000Z",
+    "metadata": {
+      "host": "career5.successfactors.eu",
+      "superseded_by": "gjobsfeed"
+    }
+  },
+  {
+    "ats": "successfactors",
+    "slug": "adidas",
+    "display_name": "Adidas",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:56:29.684Z",
+    "first_seen_at": "2026-05-14T01:25:59.000Z",
+    "metadata": {
+      "host": "career5.successfactors.eu"
+    }
+  },
+  {
+    "ats": "successfactors",
+    "slug": "bmw",
+    "display_name": "BMW Group",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:56:29.684Z",
+    "first_seen_at": "2026-05-14T01:25:59.000Z",
+    "metadata": {
+      "host": "career10.successfactors.com"
+    }
+  },
+  {
+    "ats": "successfactors",
+    "slug": "costco",
+    "display_name": "Costco Wholesale",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:56:29.684Z",
+    "first_seen_at": "2026-05-14T01:25:59.000Z",
+    "metadata": {
+      "host": "career4.successfactors.com"
+    }
+  },
+  {
+    "ats": "successfactors",
+    "slug": "publix",
+    "display_name": "Publix Super Markets",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:56:29.684Z",
+    "first_seen_at": "2026-05-14T01:25:59.000Z",
+    "metadata": {
+      "host": "career4.successfactors.com"
+    }
+  },
+  {
+    "ats": "successfactors",
+    "slug": "exxonmobil",
+    "display_name": "ExxonMobil",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:56:29.684Z",
+    "first_seen_at": "2026-05-14T02:52:47.000Z",
+    "metadata": {
+      "host": "career4.successfactors.com",
+      "superseded_by": "gjobsfeed"
+    }
+  }
+]

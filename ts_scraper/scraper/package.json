@@ -1,0 +1,34 @@
+{
+  "name": "@job_filters/scraper",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ATS scrapers, harvester, and SQLite database builder",
+  "license": "MIT",
+  "bin": {
+    "job_filters-scrape": "./bin/job_filters-scrape.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "scrape": "bun run bin/job_filters-scrape.ts scrape",
+    "harvest": "bun run bin/job_filters-scrape.ts harvest",
+    "reprobe": "bun run bin/job_filters-scrape.ts reprobe",
+    "discover-sitemap": "bun run bin/job_filters-scrape.ts discover-sitemap",
+    "build-db": "bun run bin/job_filters-scrape.ts build-db",
+    "report": "bun run bin/job_filters-scrape.ts report"
+  },
+  "dependencies": {
+    "@job_filters/shared": "workspace:*",
+    "entities": "8.0.0",
+    "fast-xml-parser": "5.9.0",
+    "htmlparser2": "12.0.0",
+    "p-limit": "7.3.0",
+    "pino": "10.3.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "fast-check": "4.7.0",
+    "msw": "2.14.6"
+  }
+}

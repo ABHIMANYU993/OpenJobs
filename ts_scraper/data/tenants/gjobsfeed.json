@@ -1,0 +1,134 @@
+[
+  {
+    "ats": "gjobsfeed",
+    "slug": "cintas",
+    "display_name": "Cintas",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:55:36.039Z",
+    "first_seen_at": "2026-05-17T21:29:59.157Z",
+    "metadata": {
+      "feed_url": "https://careers.cintas.com/sitemap.xml"
+    }
+  },
+  {
+    "ats": "gjobsfeed",
+    "slug": "colgate",
+    "display_name": "Colgate-Palmolive",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:55:36.039Z",
+    "first_seen_at": "2026-05-16T23:48:16.724Z",
+    "metadata": {
+      "feed_url": "https://jobs.colgate.com/sitemap.xml"
+    }
+  },
+  {
+    "ats": "gjobsfeed",
+    "slug": "deere",
+    "display_name": "John Deere",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:55:36.039Z",
+    "first_seen_at": "2026-05-17T21:29:59.157Z",
+    "metadata": {
+      "feed_url": "https://jobs.deere.com/sitemap.xml"
+    }
+  },
+  {
+    "ats": "gjobsfeed",
+    "slug": "dominionenergy",
+    "display_name": "Dominion Energy",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:55:36.039Z",
+    "first_seen_at": "2026-05-17T21:29:59.157Z",
+    "metadata": {
+      "feed_url": "https://careers.dominionenergy.com/sitemap.xml"
+    }
+  },
+  {
+    "ats": "gjobsfeed",
+    "slug": "eastman",
+    "display_name": "Eastman",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:55:36.039Z",
+    "first_seen_at": "2026-05-16T22:57:58.510Z",
+    "metadata": {
+      "feed_url": "https://jobs.eastman.com/sitemap.xml"
+    }
+  },
+  {
+    "ats": "gjobsfeed",
+    "slug": "entergy",
+    "display_name": "Entergy",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:55:36.039Z",
+    "first_seen_at": "2026-05-17T21:29:59.157Z",
+    "metadata": {
+      "feed_url": "https://jobs.entergy.com/sitemap.xml"
+    }
+  },
+  {
+    "ats": "gjobsfeed",
+    "slug": "exxonmobil",
+    "display_name": "ExxonMobil",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:55:36.039Z",
+    "first_seen_at": "2026-05-15T00:00:00.000Z",
+    "metadata": {
+      "feed_url": "https://jobs.exxonmobil.com/sitemap.xml"
+    }
+  },
+  {
+    "ats": "gjobsfeed",
+    "slug": "halliburton",
+    "display_name": "Halliburton",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:55:36.039Z",
+    "first_seen_at": "2026-05-16T22:57:58.510Z",
+    "metadata": {
+      "feed_url": "https://jobs.halliburton.com/sitemap.xml"
+    }
+  },
+  {
+    "ats": "gjobsfeed",
+    "slug": "hess",
+    "display_name": "Hess",
+    "status": "dead",
+    "last_probed_at": "2026-07-06T09:55:36.039Z",
+    "first_seen_at": "2026-05-17T21:29:59.157Z",
+    "metadata": {
+      "feed_url": "https://jobs.hess.com/sitemap.xml"
+    }
+  },
+  {
+    "ats": "gjobsfeed",
+    "slug": "molsoncoors",
+    "display_name": "Molson Coors",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:55:36.039Z",
+    "first_seen_at": "2026-05-16T23:48:16.724Z",
+    "metadata": {
+      "feed_url": "https://jobs.molsoncoors.com/sitemap.xml"
+    }
+  },
+  {
+    "ats": "gjobsfeed",
+    "slug": "paccar",
+    "display_name": "PACCAR",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:55:36.039Z",
+    "first_seen_at": "2026-05-16T22:57:58.510Z",
+    "metadata": {
+      "feed_url": "https://jobs.paccar.com/sitemap.xml"
+    }
+  },
+  {
+    "ats": "gjobsfeed",
+    "slug": "sap",
+    "display_name": "SAP",
+    "status": "live",
+    "last_probed_at": "2026-07-06T09:55:36.039Z",
+    "first_seen_at": "2026-05-15T00:00:00.000Z",
+    "metadata": {
+      "feed_url": "https://jobs.sap.com/sitemap.xml"
+    }
+  }
+]

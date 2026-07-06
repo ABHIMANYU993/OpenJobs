@@ -1,0 +1,172 @@
+---
+import FilterTable from "../components/FilterTable.svelte";
+import FirstPaintRows from "../components/FirstPaintRows.astro";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import {
+  dataDirIsPopulated,
+  type FirstPaintRow,
+  openSiteDb,
+  selectFirstPaintJobs,
+} from "../lib/db.ts";
+
+let dbBuilt = dataDirIsPopulated();
+let manifest: {
+  built_at: string;
+  total_rows: number;
+  tenants_total: number;
+  short_sha: string;
+} | null = null;
+let firstPaintRows: ReadonlyArray<FirstPaintRow> = [];
+
+if (dbBuilt) {
+  const site = openSiteDb();
+  try {
+    manifest = {
+      built_at: site.manifest.built_at,
+      total_rows: site.manifest.total_rows,
+      tenants_total: site.manifest.tenants_total,
+      short_sha: site.manifest.short_sha,
+    };
+    // Phase 14: bake the homepage's first 50 rows into the static HTML
+    // so the page paints real content before the slim-index JSON
+    // arrives. The Svelte FilterTable hydrates over this and replaces
+    // it once chunk 0 of the slim index has been parsed.
+    firstPaintRows = selectFirstPaintJobs(site.db, 50);
+  } finally {
+    site.close();
+  }
+}
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const builtAtIso = manifest?.built_at ?? new Date().toISOString();
+const totalRoles = manifest?.total_rows ?? 0;
+const totalFmt = new Intl.NumberFormat("en-US").format(totalRoles);
+
+const seoTitle =
+  totalRoles > 0 ? `${totalFmt} open roles · openroles` : "openroles — open roles, refreshed daily";
+const seoDescription =
+  totalRoles > 0
+    ? `Search ${totalFmt} open roles across the major job platforms. Filter by company, level, location, and remote / hybrid / onsite. Updated daily. No accounts, no email, no tracking.`
+    : "Browse open roles across the major job platforms. Updated daily. No accounts, no email, no tracking.";
+---
+
+<BaseLayout
+  title={seoTitle}
+  description={seoDescription}
+  current="browse"
+  totalRoles={totalRoles}
+  builtAtIso={builtAtIso}
+  shortSha={manifest?.short_sha}
+>
+  <section class="lede">
+    <h1>Find your next role.</h1>
+    <p>
+      No tracking. No ads. No accounts. Every open role on the major hiring
+      platforms, refreshed every night. Your filters and saved roles stay on
+      your computer &mdash; nothing about you ever leaves it.
+    </p>
+    {!manifest && (
+      <p class="manifest-pending">
+        Data is still building. Check back in a few minutes.
+      </p>
+    )}
+  </section>
+
+  <!--
+    Grid-stack the SSR pre-paint aside and the hydrated FilterTable
+    island in the SAME grid cell so they occupy identical layout
+    positions throughout hydration. Without this, the island sits
+    below the SSR aside in document flow at top=~7500 px; when the
+    SSR aside switches to `display: none` (via the :has() rule in
+    FirstPaintRows.astro), the island rockets up ~7200 px to fill
+    the space, producing the dominant CLS event on first paint.
+
+    The grid cell takes the max of its children's heights, so while
+    the SSR aside is in flow (visible) the FilterTable below it lines
+    up at the same top. When the SSR aside is removed, the cell
+    height = FilterTable's height (which equals the SSR's height
+    because the island seeds its initial rows from the same SSR data).
+    Net layout shift: zero.
+  -->
+  <div class="paint-swap">
+    <FirstPaintRows rows={firstPaintRows} basePath={base} />
+    <FilterTable client:idle basePath={base} />
+  </div>
+</BaseLayout>
+
+<style is:global>
+  /* Single-cell grid holding the SSR pre-paint aside + the hydrated
+     FilterTable island. Both children occupy `grid-area: 1 / 1` so
+     they stack in the same slot — the island's `top` doesn't change
+     when the aside is removed, which is what kills the ~7200 px CLS
+     event on first paint. The cell height = max(child heights),
+     stable across the hydration swap.
+
+     `is:global` is load-bearing here: Astro scopes the cid attribute
+     to elements rendered by this .astro file directly, but the SSR
+     aside (rendered by FirstPaintRows) and the FilterTable island
+     don't carry it. Without `is:global`, the `> *` rule targets
+     `[data-astro-cid-XXX]` and fails to match either child, leaving
+     them in normal document flow stacked vertically. */
+  .paint-swap {
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+  }
+  .paint-swap > * {
+    grid-area: 1 / 1;
+    min-width: 0;
+  }
+  /* `astro-island` defaults to `display: contents`, which makes the
+     element transparent to layout — its children flow into the
+     parent's grid as if they were direct children. That defeats the
+     grid stacking: searchbar / filter-bar / layout-grid become
+     siblings of the SSR aside instead of stacking inside one cell.
+     Force `display: block` on the island that wraps FilterTable so
+     it occupies its assigned grid cell as a single box. */
+  .paint-swap > astro-island {
+    display: block;
+  }
+</style>
+
+<style>
+  .lede {
+    display: grid;
+    gap: var(--space-3);
+    max-inline-size: 65ch;
+    margin-block-end: var(--space-5);
+  }
+
+  .lede h1 {
+    margin: 0;
+    color: var(--color-ink);
+    font-family: var(--font-display);
+    font-size: var(--text-5);
+    font-weight: 800;
+    letter-spacing: var(--track-tight);
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .lede p {
+    margin: 0;
+    color: var(--color-ink-2);
+    font-family: var(--font-serif);
+    font-size: var(--text-3);
+    line-height: 1.55;
+  }
+
+  .manifest-pending {
+    color: var(--color-ink-3);
+    font-family: var(--font-mono);
+    font-size: var(--text-1);
+    letter-spacing: var(--track-wide);
+    text-transform: uppercase;
+  }
+
+  @media (min-width: 768px) {
+    .lede h1 {
+      font-size: var(--text-6);
+    }
+  }
+</style>

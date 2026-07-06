@@ -1,0 +1,88 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Environment files
+.env
+
+# Virtual environments
+venv/
+env/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Uploaded / generated data
+uploads/
+*.log
+certs/
+
+# Docker
+mysql_data/
+*.pid
+*.sock
+
+# Byte-compiled / build artifacts
+build/
+dist/
+*.egg-info/
+
+# Custom ignores
+helper.txt
+jobs_backup.sql
+cheatsheet.md
+backup.sql
+refresh-local.bat
+fetch_script.js
+test.py
+js/old_script.js
+
+# Scraper output
+scripts/output/
+
+# Test Files
+scripts/tests/test_icims.py
+scripts/tests/test_workday.py
+scripts/tests/test_bamboohr.py
+scripts/tests/test_enrich.py
+scripts/tests/test_scraper.py
+
+# ============================================================
+# Generated data - served from the data-live branch, NOT tracked on main.
+# This is the heavy daily-regenerated data that caused repo bloat.
+# ============================================================
+data/chunks/
+data/metadata.json
+
+# Ignore JSON files globally, except specific tracked ones below
+*.json
+!data/greenhouse_companies.json
+!data/ashby_companies.json
+!data/bamboohr_companies.json
+!data/workday_companies.json
+!data/lever_companies.json
+!data/icims_companies.json
+!data/paylocity_companies_clean.json
+!data/locations.json
+!data/salary/salary_lookup.json
+!data/salary/shards/salary_*.json
+
+# Keep trend history tracked on main (append-only, valuable, deltas cheaply)
+!data/trends/
+!data/trends/daily.jsonl
+
+# Don't allow python files in data
+data/*.py
+
+# Ignore CSV files globally, except specific ones
+/city_aggregator/*.csv
+/city_aggregator/*.py
+/city_aggregator/admin1CodesASCII.txt
+/city_aggregator/cities500.txt

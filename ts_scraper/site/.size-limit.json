@@ -1,0 +1,26 @@
+[
+  {
+    "name": "FilterTable island (gzip)",
+    "path": "dist/_astro/FilterTable.*.js",
+    "limit": "35 KB",
+    "gzip": true
+  },
+  {
+    "name": "All client JS (gzip)",
+    "path": "dist/_astro/*.js",
+    "limit": "60 KB",
+    "gzip": true
+  },
+  {
+    "name": "Global CSS (gzip)",
+    "path": "dist/styles/*.css",
+    "limit": "15 KB",
+    "gzip": true
+  },
+  {
+    "name": "Index HTML (gzip; covers inlined CSS)",
+    "path": "dist/index.html",
+    "limit": "30 KB",
+    "gzip": true
+  }
+]

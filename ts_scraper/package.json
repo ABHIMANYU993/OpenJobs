@@ -1,0 +1,64 @@
+{
+  "name": "job_filters",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Static, queryable job board aggregator across major Applicant Tracking Systems",
+  "license": "MIT",
+  "author": "icebyte",
+  "type": "module",
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "workspaces": [
+    "shared",
+    "scraper",
+    "site"
+  ],
+  "scripts": {
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "typecheck": "bun run --filter '*' typecheck",
+    "test": "bun test --coverage --path-ignore-patterns='**/tests/e2e/**'",
+    "test:watch": "bun test --watch --path-ignore-patterns='**/tests/e2e/**'",
+    "scrape": "bun run --filter @job_filters/scraper scrape",
+    "harvest": "bun run --filter @job_filters/scraper harvest",
+    "reprobe": "bun run --filter @job_filters/scraper reprobe",
+    "discover-sitemap": "bun run --filter @job_filters/scraper discover-sitemap",
+    "build-db": "bun run --filter @job_filters/scraper build-db",
+    "report": "bun run --filter @job_filters/scraper report",
+    "dev": "bun run --filter @job_filters/site dev",
+    "build": "bun run --filter @job_filters/site build",
+    "preview": "bun run --filter @job_filters/site preview",
+    "e2e": "bun run --filter @job_filters/site e2e",
+    "lighthouse": "bun run --filter @job_filters/site lighthouse",
+    "size-limit": "bun run --filter @job_filters/site size-limit",
+    "changelog": "git-cliff --output CHANGELOG.md"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.0",
+    "@commitlint/cli": "21.0.2",
+    "@commitlint/config-conventional": "21.0.2",
+    "@types/bun": "1.3.14",
+    "lefthook": "2.1.9",
+    "typescript": "6.0.3"
+  },
+  "trustedDependencies": [
+    "lefthook"
+  ],
+  "dependencies": {
+    "socks": "2.8.9"
+  },
+  "overrides": {
+    "ip-address": "^10.2.0",
+    "fast-uri": "^3.1.2",
+    "basic-ftp": "^6.0.1",
+    "devalue": "5.8.1",
+    "ws": ">=8.21.0",
+    "esbuild": ">=0.28.1",
+    "vite": "7.3.6",
+    "launch-editor": "2.14.1",
+    "js-yaml": "^4.2.0",
+    "@opentelemetry/core": "2.8.0"
+  }
+}

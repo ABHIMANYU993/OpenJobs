@@ -1,0 +1,517 @@
+name: Weekly harvest
+
+on:
+  schedule:
+    # 02:43 UTC every Monday — off-the-hour to avoid schedule herding.
+    - cron: "43 2 * * 1"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "discover-only, reprobe-only, bootstrap (full historical pull), sitemap (platform sitemap seed), or both (default)."
+        required: false
+        type: choice
+        options:
+          - both
+          - discover-only
+          - reprobe-only
+          - bootstrap
+          - sitemap
+        default: both
+      sitemap_max:
+        description: "Sitemap mode: cap child sitemaps fetched per descending source (hiringthing). Default: 200 (a bounded sample; raise for a full ~2,891-child sweep)."
+        required: false
+        type: string
+        default: "200"
+      bootstrap_since_year:
+        description: "Bootstrap mode: walk every CC-MAIN snapshot from this year onward (default 2008)."
+        required: false
+        type: string
+        default: "2008"
+      max_age_days:
+        description: "Reprobe tenants whose last_probed_at is older than this many days. Default: 7."
+        required: false
+        type: string
+        default: "7"
+      batch_size:
+        description: "Cap reprobe count per ATS per run. Default: 5000."
+        required: false
+        type: string
+        default: "5000"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  BUN_VERSION: "1.3.13"
+  CONTACT_URL: "https://github.com/icebyte/job_filters"
+  USER_AGENT: "job_filters/1.0.0 (+https://github.com/icebyte/job_filters)"
+
+jobs:
+  # Stage 1: incremental discovery. Each ATS reads its
+  # data/harvest-state/{ats}.json, fetches collinfo.json, and processes
+  # only snapshots not already recorded. CDX work shrinks from ~960
+  # requests/run to ~24/run in steady state. New slugs land in
+  # data/tenants/{ats}.json with status=transient_failure; they get
+  # promoted in the reprobe stage. See ADR-0011.
+  discover:
+    name: Discover ${{ matrix.ats }}
+    if: ${{ github.event.inputs.mode != 'reprobe-only' && github.event.inputs.mode != 'sitemap' }}
+    runs-on: ubuntu-24.04
+    # Bootstrap walks ~120 snapshots × ~10 pages each = an hour-ish per ATS;
+    # incremental discovery is ~30 seconds. Sized for the bootstrap worst
+    # case so a one-shot dispatch can run end-to-end.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        ats:
+          - greenhouse
+          - lever
+          - ashby
+          - bamboohr
+          - workday
+          - icims
+          - recruitee
+          - breezy
+          - personio
+          - workable
+          - teamtailor
+          - smartrecruiters
+          - csod
+          - taleo
+          - ultipro
+          - jobvite
+          - zohorecruit
+          - talentlyft
+          - pinpointhq
+          - applicantpro
+          - applicantstack
+          - homerun
+          - factorial
+          - eightfold
+          # New subdomain connectors with real CDX discovery patterns.
+          - jazzhr
+          - hrmdirect
+          # Shared-host connector; CDX discovery captures the numeric cid
+          # query parameter on recruit.hirebridge.com URLs.
+          - hirebridge
+          # ApplicantPool hosted boards; CDX discovery captures the subdomain
+          # slug on *.applicantpool.com URLs (same shape as bamboohr/breezy).
+          - applicantpool
+          # Manatal hosted boards; CDX discovery captures the first path
+          # segment on www.careers-page.com/{slug} URLs (path-slug shape).
+          - manatal
+          # Subdomain/path connectors with real CDX discovery patterns whose
+          # tenant lists shipped seed-only. Bootstrap once (mode=bootstrap)
+          # to mint the historical corpus, then incremental discovery keeps
+          # them fresh like every other pattern-based ATS.
+          - careerplug
+          - jibeapply
+          - isolvedhire
+          - applitrack
+          - hiringthing
+          - hireology
+          # PageUp boards on the shared *.pageuppeople.com hosts; CDX
+          # discovery captures the clientkey (slug) plus host/instance
+          # metadata from the `/{instance}/{clientkey}/en/listing` path.
+          - pageup
+          # Rippling boards are path-addressed on ats.rippling.com/{slug};
+          # CDX discovery captures the first path segment (like hireology).
+          - rippling
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: ./.github/actions/bun-install
+
+      - name: Discover ${{ matrix.ats }}
+        env:
+          MODE: ${{ github.event.inputs.mode || 'both' }}
+          SINCE_YEAR: ${{ github.event.inputs.bootstrap_since_year || '2008' }}
+        run: |
+          mkdir -p data/tenants data/harvest-state
+          if [ "$MODE" = "bootstrap" ]; then
+            # One-shot historical pull. --skip-probe defers liveness to the
+            # reprobe stage; --snapshots-since walks every CC-MAIN snapshot
+            # from the requested year forward. The state file gets created
+            # on first write so subsequent --incremental runs work.
+            echo "::notice::bootstrap mode for ${{ matrix.ats }} — pulling all CC-MAIN since $SINCE_YEAR"
+            bun run harvest \
+              --ats "${{ matrix.ats }}" \
+              --snapshots-since "$SINCE_YEAR" \
+              --skip-probe \
+              --user-agent "$USER_AGENT" \
+              --output-dir "${GITHUB_WORKSPACE}/data"
+            exit 0
+          fi
+          # `--incremental` requires an existing state file. The CLI returns
+          # 2 if no state file is found — surface it as a notice and exit
+          # so the workflow doesn't fail. Run with mode=bootstrap to seed.
+          if [ ! -s "data/harvest-state/${{ matrix.ats }}.json" ]; then
+            echo "::notice::no state file for ${{ matrix.ats }} — re-run with mode=bootstrap to seed (see specs/harvest-incremental.md)"
+            exit 0
+          fi
+          bun run harvest \
+            --ats "${{ matrix.ats }}" \
+            --incremental \
+            --skip-probe \
+            --user-agent "$USER_AGENT" \
+            --output-dir "${GITHUB_WORKSPACE}/data"
+
+      - name: Upload tenants and state for ${{ matrix.ats }}
+        if: hashFiles(format('data/tenants/{0}.json', matrix.ats)) != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: discover-${{ matrix.ats }}
+          path: |
+            data/tenants/${{ matrix.ats }}.json
+            data/harvest-state/${{ matrix.ats }}.json
+          retention-days: 14
+
+  # Optional stage: platform-sitemap discovery. Off the default nightly /
+  # weekly path — runs ONLY on an explicit workflow_dispatch with
+  # mode=sitemap. Reads each supported platform's complete public sitemap
+  # index (a second discovery source alongside CDX) and seeds net-new
+  # tenants as transient_failure into data/tenants/{ats}.json; for the
+  # liveness-truth source (jazzhr) it also re-asserts stale dead/transient
+  # boards for re-probe. The reprobe stage below pulls these artifacts and
+  # validates the newly-seeded slugs in the same run.
+  #
+  # Fetch cost (see specs/sitemap-discovery.md): isolvedhire = 1 request
+  # (~7,176 slugs), jazzhr = 5 requests (~7,200 slugs), hiringthing = 1
+  # index + up to sitemap_max gzip children (default 200; a full sweep is
+  # ~2,891 GET+gunzip). Kept operator-triggered because the hiringthing
+  # full sweep is expensive; isolvedhire/jazzhr are cheap.
+  sitemap:
+    name: Sitemap discover ${{ matrix.ats }}
+    if: ${{ github.event.inputs.mode == 'sitemap' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ats:
+          - isolvedhire
+          - jazzhr
+          - hiringthing
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: ./.github/actions/bun-install
+
+      - name: Sitemap discover ${{ matrix.ats }}
+        env:
+          SITEMAP_MAX: ${{ github.event.inputs.sitemap_max || '200' }}
+        run: |
+          mkdir -p data/tenants
+          bun run discover-sitemap \
+            --ats "${{ matrix.ats }}" \
+            --max "$SITEMAP_MAX" \
+            --output-dir "${GITHUB_WORKSPACE}/data"
+
+      - name: Upload sitemap-seeded tenants for ${{ matrix.ats }}
+        if: hashFiles(format('data/tenants/{0}.json', matrix.ats)) != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: sitemap-${{ matrix.ats }}
+          path: data/tenants/${{ matrix.ats }}.json
+          retention-days: 14
+
+  # Stage 2: liveness reprobe. Operates on the tenant list (post-discovery),
+  # picks tenants whose last_probed_at is older than max_age_days, probes
+  # them, updates status in place. Bounded by batch_size so each runner
+  # finishes in <15 min. New slugs from discovery (last_probed_at=today)
+  # are not re-probed this run — they wait their turn next week.
+  reprobe:
+    name: Reprobe ${{ matrix.ats }}
+    needs: [discover, sitemap]
+    if: ${{ always() && github.event.inputs.mode != 'discover-only' }}
+    runs-on: ubuntu-24.04
+    # Bootstrap reprobes the whole just-discovered corpus (tens of
+    # thousands of slugs per ATS); steady-state runs reprobe only the
+    # batch_size-bounded stale cohort. Sized for the bootstrap worst case.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        ats:
+          - greenhouse
+          - lever
+          - ashby
+          - bamboohr
+          - workday
+          - icims
+          - recruitee
+          - breezy
+          - personio
+          - workable
+          - teamtailor
+          - smartrecruiters
+          - csod
+          - taleo
+          - ultipro
+          - jobvite
+          - zohorecruit
+          - talentlyft
+          - pinpointhq
+          - applicantpro
+          - applicantstack
+          - homerun
+          - factorial
+          - eightfold
+          # Tenant lists for these ATSes are seeded by other paths
+          # (single-tenant constants, JSON-LD hand-curation, BrassRing
+          # CC enumeration) rather than CDX-pattern discover, so they
+          # are not in the discover matrix above. They still need
+          # weekly liveness reprobing — without it, newly-seeded slugs
+          # stay at `transient_failure` and the scrape workflow's
+          # `status == "live"` filter rejects them every day.
+          - successfactors
+          - amazonjobs
+          - applejobs
+          - tiktokcareers
+          - metacareers
+          - jsonld
+          - brassring
+          - gjobsfeed
+          # New connectors. jazzhr/hrmdirect are CDX-discovered (also in the
+          # discover matrix); oraclecloud/phenom are operator-seeded. All four
+          # need weekly reprobing to keep tenants `live` (probe URL builders
+          # added in harvest/probe.ts).
+          - jazzhr
+          - hrmdirect
+          - oraclecloud
+          - phenom
+          # SchoolSpring: single-tenant constant, reprobed like the
+          # other single-tenant customs above.
+          - schoolspring
+          # Shared-host connector (recruit.hirebridge.com, tenant = numeric
+          # cid); also in the discover matrix above.
+          - hirebridge
+          # ApplicantPool hosted boards ({slug}.applicantpool.com); CDX-
+          # discovered (also in the discover matrix above), reprobed weekly.
+          - applicantpool
+          # Remaining 2026-07 connectors. The first six are also in the
+          # discover matrix; the last three are metadata-tenancy (no CDX
+          # pattern) so they are operator-seeded and reprobe-only, like
+          # workday/oraclecloud. All need weekly reprobing so seeds don't
+          # decay out of `live` and transient failures can recover.
+          # isolvedhire/hiringthing are also seeded by the mode=sitemap
+          # stage (as transient_failure), and this reprobe promotes them.
+          - careerplug
+          - jibeapply
+          - isolvedhire
+          - applitrack
+          - hiringthing
+          - hireology
+          - apploi
+          - taleotbe
+          - workstream
+          # PageUp boards; CDX-discovered (also in the discover matrix above)
+          # and reprobed weekly. Composite (host, instance, clientkey)
+          # tenancy, so seeds missing metadata stay transient until harvest
+          # completes the composite (same as taleotbe).
+          - pageup
+          # Manatal hosted boards (www.careers-page.com/{slug}); CDX-discovered
+          # (also in the discover matrix above), reprobed weekly.
+          - manatal
+          - rippling
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: ./.github/actions/bun-install
+
+      - name: Pull discovery artifact for ${{ matrix.ats }} (if any)
+        # When discover ran in this same workflow (mode=both / bootstrap)
+        # we want its just-discovered slugs included in the reprobe pass.
+        # In reprobe-only mode the discover stage was skipped entirely so
+        # there's no artifact to pull — gate the step on mode rather than
+        # let the action emit a "not found" error annotation that pollutes
+        # every reprobe-only run's logs.
+        if: ${{ github.event.inputs.mode != 'reprobe-only' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: discover-${{ matrix.ats }}
+          # actions/upload-artifact strips the common parent (data/) when
+          # given multiple paths under it, so the artifact internally
+          # holds tenants/<ats>.json and harvest-state/<ats>.json without
+          # the data/ prefix. Download with path=data so files land at
+          # data/tenants/<ats>.json which is where the rest of the
+          # workflow + the repo expect them.
+          path: data
+          merge-multiple: true
+
+      - name: Pull sitemap artifact for ${{ matrix.ats }} (if any)
+        # In mode=sitemap the sitemap stage seeded net-new / resurrected
+        # slugs into tenants/<ats>.json (no harvest-state file). Pull it so
+        # this reprobe pass validates those transient_failure slugs and
+        # promotes the live ones. Gated on mode=sitemap; other modes never
+        # produce this artifact, so the download would just emit a
+        # not-found annotation.
+        if: ${{ github.event.inputs.mode == 'sitemap' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: sitemap-${{ matrix.ats }}
+          # The sitemap artifact holds tenants/<ats>.json (single path, so
+          # upload-artifact keeps the tenants/ prefix). path=data lands it
+          # at data/tenants/<ats>.json where reprobe reads it.
+          path: data/tenants
+
+      - name: Reprobe ${{ matrix.ats }}
+        env:
+          MODE: ${{ github.event.inputs.mode || 'both' }}
+          MAX_AGE_DAYS: ${{ github.event.inputs.max_age_days || '7' }}
+          BATCH_SIZE: ${{ github.event.inputs.batch_size || '5000' }}
+        run: |
+          if [ ! -s "data/tenants/${{ matrix.ats }}.json" ]; then
+            echo "::notice::no tenants file for ${{ matrix.ats }}; skipping reprobe"
+            exit 0
+          fi
+          # Bootstrap mode probes the whole just-discovered corpus —
+          # override age and batch caps to exercise everything.
+          if [ "$MODE" = "bootstrap" ]; then
+            MAX_AGE_DAYS=0
+            BATCH_SIZE=100000
+          fi
+          bun run reprobe \
+            --ats "${{ matrix.ats }}" \
+            --max-age-days "$MAX_AGE_DAYS" \
+            --batch-size "$BATCH_SIZE" \
+            --user-agent "$USER_AGENT" \
+            --output-dir "${GITHUB_WORKSPACE}/data"
+
+      - name: Upload reprobed tenants for ${{ matrix.ats }}
+        if: hashFiles(format('data/tenants/{0}.json', matrix.ats)) != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: reprobe-${{ matrix.ats }}
+          path: |
+            data/tenants/${{ matrix.ats }}.json
+            data/harvest-state/${{ matrix.ats }}.json
+          retention-days: 14
+
+  commit:
+    name: Aggregate + commit tenant lists
+    needs: [discover, reprobe]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # Download discover-* and reprobe-* in TWO SEPARATE STEPS instead
+      # of one `pattern: "{discover,reprobe}-*"` step.
+      #
+      # Why: actions/download-artifact@v8 extracts a matched-pattern set
+      # in parallel, so when two artifacts contain the same path
+      # (discover-X and reprobe-X both write `tenants/X.json` +
+      # `harvest-state/X.json`), concurrent unzip threads race on the
+      # same destination file and the resulting bytes can be a
+      # half-and-half splice — invalid JSON, even though both source
+      # artifacts are individually valid. That race silently broke the
+      # commit job for ~4 weeks of weekly runs (the validation step
+      # then rejected `applicantpro.json` and the whole commit failed),
+      # which left `last_probed_at` stuck on its last good date until
+      # the 30-day staleness filter in scrape.yml tipped and the daily
+      # corpus dropped by ~half.
+      #
+      # Sequential downloads sidestep the race: discover-* extracts to
+      # completion, then reprobe-* overwrites cleanly (reprobe is the
+      # later pipeline stage, so reprobe must always win — this matches
+      # the original `merge-multiple` intent).
+      #
+      # path=data because actions/upload-artifact strips the common
+      # parent (data/) on upload — see the per-shard pull step's
+      # comment for the full explanation.
+      - name: Download discover artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: data
+          pattern: "discover-*"
+          merge-multiple: true
+
+      - name: Download reprobe artifacts (overwrites discover)
+        uses: actions/download-artifact@v8
+        with:
+          path: data
+          pattern: "reprobe-*"
+          merge-multiple: true
+
+      - name: Show diff summary
+        run: |
+          echo "## Tenant list diffs" >> "$GITHUB_STEP_SUMMARY"
+          shopt -s nullglob
+          for file in data/tenants/*.json; do
+            ats="$(basename "$file" .json)"
+            count="$(jq 'length' "$file" 2>/dev/null || echo 0)"
+            live="$(jq '[.[] | select(.status == "live")] | length' "$file" 2>/dev/null || echo 0)"
+            echo "- **${ats}**: ${count} tenants (${live} live)" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Validate tenant JSON before commit
+        run: |
+          # Reject malformed tenant JSON before it lands on main. The
+          # harvest pipeline previously committed with [skip ci] which
+          # masked atomic-write bugs (see commit 7984140 which committed
+          # six files with trailing-garbage / mid-array corruption and
+          # was only caught when downstream PRs failed lint). A simple
+          # parse check here makes the workflow fail loudly at the
+          # source instead of silently corrupting main.
+          set -e
+          shopt -s nullglob
+          for file in data/tenants/*.json; do
+            if ! jq -e 'type == "array"' "$file" > /dev/null 2>&1; then
+              echo "::error file=${file}::invalid JSON or not an array; refusing to commit"
+              exit 1
+            fi
+          done
+          echo "tenant json validation: ok"
+
+      - name: Commit updated tenant lists and state files
+        run: |
+          if [ -z "$(git status --porcelain data/tenants/ data/harvest-state/)" ]; then
+            echo "no tenant or state changes; skipping commit"
+            exit 0
+          fi
+          git config user.name "job_filters-bot"
+          git config user.email "job_filters-bot@users.noreply.github.com"
+          git add data/tenants/ data/harvest-state/
+          # No [skip ci] — we want CI to run on harvest commits so the
+          # standard Lint + format / Type check / Test gates catch any
+          # corruption the pre-commit jq validation didn't. The data-only
+          # nature of the diff means CI completes fast (no rebuild of
+          # scraper/site internals).
+          git commit -m "chore(harvest): refresh tenant lists"
+          # Harvest legs run for 5-30 minutes; main may move during that
+          # window when other workflows commit or PR merges land. Plain push
+          # then loses the harvest commit. Pull --rebase + retry handles the
+          # concurrent-update case; tenant + state edits live entirely under
+          # data/ which nothing else writes, so rebase is conflict-free.
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin main
+            if git push; then
+              echo "push succeeded on attempt ${attempt}"
+              exit 0
+            fi
+            echo "push rejected on attempt ${attempt}; will retry"
+            sleep 5
+          done
+          echo "::error::could not push tenant updates after 3 attempts"
+          exit 1

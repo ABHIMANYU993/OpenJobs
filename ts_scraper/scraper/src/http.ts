@@ -1,0 +1,285 @@
+import type { RobotsTxtCache } from "./robots.ts";
+
+export type HttpErrorKind = "permanent" | "transient" | "auth";
+
+export class HttpError extends Error {
+  readonly kind: HttpErrorKind;
+  readonly status?: number;
+  override readonly cause?: unknown;
+
+  constructor(kind: HttpErrorKind, message: string, status?: number, cause?: unknown) {
+    super(message);
+    this.name = "HttpError";
+    this.kind = kind;
+    if (status !== undefined) this.status = status;
+    if (cause !== undefined) this.cause = cause;
+  }
+}
+
+export interface RetryPolicy {
+  readonly maxAttempts: number;
+  readonly baseMs: number;
+  readonly maxMs: number;
+}
+
+export interface HttpMetrics {
+  requestsMade: number;
+  requestsFailed: number;
+  requestsRetried: number;
+  bytesReceived: number;
+}
+
+const DEFAULT_RETRY: RetryPolicy = { maxAttempts: 3, baseMs: 500, maxMs: 30_000 };
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+export interface HttpClientOptions {
+  readonly fetchFn?: typeof globalThis.fetch;
+  readonly userAgent: string;
+  readonly robots: RobotsTxtCache;
+  readonly retry?: RetryPolicy;
+  readonly timeoutMs?: number;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly random?: () => number;
+}
+
+export interface HttpRequestInit {
+  readonly method?: string;
+  readonly headers?: Record<string, string>;
+  readonly body?: string;
+  readonly signal?: AbortSignal;
+  // Skip the robots.txt check for documented-public-API hosts whose
+  // robots.txt is written for general crawlers but does not represent
+  // their wishes for API access. Caller must justify each use.
+  readonly skipRobots?: boolean;
+  // Redirect handling, forwarded to the underlying fetch. Defaults to
+  // "follow". Use "manual" when the caller needs to see a 3xx itself —
+  // e.g. a liveness probe where a cross-host redirect to a generic
+  // landing page must be classified as a dead tenant, not silently
+  // followed into a 200.
+  readonly redirect?: "follow" | "manual";
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
+}
+
+/**
+ * Detect connection-level failures (DNS, TCP, TLS) that won't recover on
+ * retry: NXDOMAIN, connection refused, certificate verification failure,
+ * host unreachable. These should be classified as `permanent` HttpErrors
+ * so callers (probe.ts) can distinguish a genuinely-dead tenant from a
+ * transient network blip.
+ *
+ * Bun's `fetch` reports NXDOMAIN and TCP RST under a single string
+ * `code: 'ConnectionRefused'` — we lump them together since the
+ * permanence verdict is the same either way. Node's fetch uses
+ * `cause.code` like `'ENOTFOUND'`, `'ECONNREFUSED'`, `'CERT_*'` —
+ * cover both shapes.
+ */
+function isConnectionLevelFailure(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const codes = ["ConnectionRefused", "ENOTFOUND", "ECONNREFUSED", "EAI_FAIL", "EHOSTUNREACH"];
+  const errCode = (err as { code?: unknown }).code;
+  if (typeof errCode === "string" && codes.includes(errCode)) return true;
+  const causeCode = (err.cause as { code?: unknown } | undefined)?.code;
+  if (typeof causeCode === "string" && codes.includes(causeCode)) return true;
+  // TLS / cert-validation failures also won't recover.
+  if (typeof errCode === "string" && errCode.startsWith("CERT_")) return true;
+  if (typeof causeCode === "string" && causeCode.startsWith("CERT_")) return true;
+  return false;
+}
+
+const HTTP_DATE_RE = /^[A-Z][a-z][a-z], \d{2} [A-Z][a-z][a-z] \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+function parseRetryAfter(value: string | null, now: number): number | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number.parseInt(trimmed, 10);
+    if (Number.isFinite(seconds)) return seconds * 1000;
+  }
+  if (HTTP_DATE_RE.test(trimmed)) {
+    const date = Date.parse(trimmed);
+    if (Number.isFinite(date)) return Math.max(0, date - now);
+  }
+  return null;
+}
+
+export class HttpClient {
+  private readonly fetchFn: typeof globalThis.fetch;
+  private readonly userAgent: string;
+  private readonly robots: RobotsTxtCache;
+  private readonly retry: RetryPolicy;
+  private readonly timeoutMs: number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly random: () => number;
+  readonly metrics: HttpMetrics = {
+    requestsMade: 0,
+    requestsFailed: 0,
+    requestsRetried: 0,
+    bytesReceived: 0,
+  };
+
+  constructor(opts: HttpClientOptions) {
+    this.fetchFn = opts.fetchFn ?? globalThis.fetch;
+    this.userAgent = opts.userAgent;
+    this.robots = opts.robots;
+    this.retry = opts.retry ?? DEFAULT_RETRY;
+    this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    this.random = opts.random ?? Math.random;
+  }
+
+  async request(url: string, init: HttpRequestInit = {}): Promise<Response> {
+    if (init.signal?.aborted) {
+      throw new HttpError("permanent", "request cancelled by caller before dispatch");
+    }
+    const target = new URL(url);
+    if (target.protocol !== "http:" && target.protocol !== "https:") {
+      throw new HttpError("permanent", `unsupported protocol: ${target.protocol}`);
+    }
+
+    if (!init.skipRobots) {
+      const allowed = await this.robots.isAllowed(url, this.userAgent);
+      if (!allowed) {
+        throw new HttpError("permanent", `robots.txt disallows ${url}`);
+      }
+    }
+
+    let lastTransient: HttpError | null = null;
+
+    for (let attempt = 0; attempt < this.retry.maxAttempts; attempt++) {
+      if (init.signal?.aborted) {
+        throw new HttpError("permanent", "request cancelled by caller mid-retry");
+      }
+      if (attempt > 0) this.metrics.requestsRetried += 1;
+      this.metrics.requestsMade += 1;
+      const result = await this.attempt(url, init).catch((err: unknown) => err);
+
+      if (result instanceof Response) {
+        this.recordBytes(result);
+        if (result.status >= 200 && result.status < 400) return result;
+        this.metrics.requestsFailed += 1;
+        if (result.status === 401 || result.status === 403) {
+          return await this.handleAuth(url, init, result);
+        }
+        if (result.status === 429 || result.status >= 500) {
+          lastTransient = new HttpError(
+            "transient",
+            `HTTP ${result.status} at ${url}`,
+            result.status,
+          );
+          if (attempt < this.retry.maxAttempts - 1) {
+            await this.sleep(this.computeBackoff(attempt, result));
+            continue;
+          }
+          throw lastTransient;
+        }
+        throw new HttpError("permanent", `HTTP ${result.status} at ${url}`, result.status);
+      }
+
+      this.metrics.requestsFailed += 1;
+      if (isAbortError(result) && init.signal?.aborted) {
+        throw new HttpError(
+          "permanent",
+          "request cancelled by caller mid-flight",
+          undefined,
+          result,
+        );
+      }
+
+      // Connection-level failures (DNS NXDOMAIN, ECONNREFUSED, certificate
+      // failures, host unreachable) are PERSISTENT for the time horizon
+      // we care about — a probe of a tenant whose subdomain hasn't
+      // resolved for 3 retries spaced 0.5-30s apart isn't going to
+      // resolve any time soon. Marking these as "transient" leaves dead
+      // tenants stuck at transient_failure forever instead of getting
+      // honestly classified as `dead`. Bun's fetch reports DNS NXDOMAIN
+      // and TCP RST under the same `code: 'ConnectionRefused'` string —
+      // we can't distinguish them here, but treating both as permanent
+      // is correct for our use case.
+      const code = isConnectionLevelFailure(result);
+      lastTransient = new HttpError(
+        code ? "permanent" : "transient",
+        result instanceof Error ? result.message : "network error",
+        undefined,
+        result,
+      );
+      if (!code && attempt < this.retry.maxAttempts - 1) {
+        await this.sleep(this.computeBackoff(attempt));
+        continue;
+      }
+      throw lastTransient;
+    }
+
+    throw lastTransient ?? new HttpError("transient", "no attempts made");
+  }
+
+  private async handleAuth(
+    url: string,
+    init: HttpRequestInit,
+    firstResponse: Response,
+  ): Promise<Response> {
+    await this.sleep(this.computeBackoff(0, firstResponse));
+    if (init.signal?.aborted) {
+      throw new HttpError("permanent", "request cancelled by caller during auth retry");
+    }
+    this.metrics.requestsRetried += 1;
+    this.metrics.requestsMade += 1;
+    const result = await this.attempt(url, init).catch((err: unknown) => err);
+    if (result instanceof Response) {
+      this.recordBytes(result);
+      if (result.status >= 200 && result.status < 400) return result;
+      this.metrics.requestsFailed += 1;
+      if (result.status === 401 || result.status === 403) {
+        throw new HttpError("auth", `HTTP ${result.status} at ${url}`, result.status);
+      }
+      if (result.status === 429 || result.status >= 500) {
+        throw new HttpError("transient", `HTTP ${result.status} at ${url}`, result.status);
+      }
+      throw new HttpError("permanent", `HTTP ${result.status} at ${url}`, result.status);
+    }
+    this.metrics.requestsFailed += 1;
+    throw new HttpError(
+      "transient",
+      result instanceof Error ? result.message : "network error",
+      undefined,
+      result,
+    );
+  }
+
+  private recordBytes(res: Response): void {
+    const len = Number.parseInt(res.headers.get("content-length") ?? "", 10);
+    if (Number.isFinite(len) && len > 0) this.metrics.bytesReceived += len;
+  }
+
+  private async attempt(url: string, init: HttpRequestInit): Promise<Response> {
+    const timeoutSignal = AbortSignal.timeout(this.timeoutMs);
+    const signal = init.signal ? AbortSignal.any([timeoutSignal, init.signal]) : timeoutSignal;
+    const headers: Record<string, string> = {
+      "user-agent": this.userAgent,
+      accept: "application/json,text/xml;q=0.9,*/*;q=0.8",
+      ...(init.headers ?? {}),
+    };
+    return await this.fetchFn(url, {
+      method: init.method ?? "GET",
+      headers,
+      ...(init.body !== undefined ? { body: init.body } : {}),
+      signal,
+      redirect: init.redirect ?? "follow",
+      credentials: "omit",
+    });
+  }
+
+  private computeBackoff(attempt: number, res?: Response): number {
+    if (res) {
+      const ms = parseRetryAfter(res.headers.get("retry-after"), Date.now());
+      if (ms !== null) {
+        return Math.min(Math.max(ms, this.retry.baseMs), this.retry.maxMs);
+      }
+    }
+    const exponential = this.retry.baseMs * 2 ** attempt;
+    const jitter = exponential * (this.random() * 0.4 - 0.2);
+    return Math.min(this.retry.maxMs, Math.max(0, Math.round(exponential + jitter)));
+  }
+}

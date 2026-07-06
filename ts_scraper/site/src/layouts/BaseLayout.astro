@@ -1,0 +1,316 @@
+---
+/**
+ * Brutalist Press base layout.
+ * Owns the html/head shell and the Masthead + footer chrome.
+ * Pages provide body content via the default slot.
+ */
+
+import "../styles/tokens.css";
+import "../styles/global.css";
+import Masthead, { type NavCurrent } from "../components/Masthead.astro";
+import { jsonLdSafe } from "../lib/json-ld.ts";
+import { REPO_URL, SITE_ORIGIN } from "../lib/site-config.ts";
+
+interface Props {
+  title: string;
+  description?: string;
+  current: NavCurrent;
+  totalRoles: number;
+  builtAtIso: string;
+  /** Override the default canonical path (defaults to the current pathname). */
+  canonicalPath?: string;
+  /**
+   * Set robots/googlebot to noindex,follow. Used on pages whose content is
+   * client-rendered (per-role detail at /role/?id=...) and therefore not
+   * useful to crawlers. Default is index,follow.
+   */
+  noindex?: boolean;
+  /**
+   * Optional 7-char git short-sha for the build. When set, surfaces in
+   * the masthead strap as a link to the upstream commit so users can
+   * see exact provenance. Omitted on theme-wireframe / non-data pages.
+   */
+  shortSha?: string;
+}
+
+const {
+  title,
+  description = "Browse thousands of open roles across the major job platforms. Search, filter, and save what you like — no accounts, no email, no tracking.",
+  current,
+  totalRoles,
+  builtAtIso,
+  canonicalPath,
+  noindex = false,
+  shortSha,
+} = Astro.props;
+
+const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+// Astro.site is set by astro.config.ts from the SITE_ORIGIN constant.
+// The defensive fallback also uses SITE_ORIGIN so there's only one
+// hardcoded URL string in the codebase — both branches resolve to the
+// same value, the fallback exists only to satisfy the type-narrowing.
+const siteOrigin = Astro.site?.toString().replace(/\/$/, "") ?? SITE_ORIGIN;
+const siteRoot = `${siteOrigin}${basePath}`;
+const canonical = `${siteOrigin}${canonicalPath ?? Astro.url.pathname}`;
+
+// Display title combines the page title with the brand. Front-of-page brand
+// helps SEO and click-through; `og:title` mirrors the same shape.
+const fullTitle = title.toLowerCase().includes("openroles") ? title : `${title} · openroles`;
+
+const totalRolesFormatted = new Intl.NumberFormat("en-US").format(totalRoles);
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <!--
+      Inline theme initialization MUST run before any CSS load so the document
+      root has data-theme set before the browser starts laying out the cascade.
+      Otherwise the page paints once with the default light theme, then re-
+      paints when the script (originally placed at end of head) runs — a
+      visible flash for OS-dark / persisted-dark users.
+    -->
+    <script is:inline>
+      (() => {
+        try {
+          const stored = localStorage.getItem("openroles:theme");
+          const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          const theme = stored === "dark" || stored === "light"
+            ? stored
+            : (prefersDark ? "dark" : "light");
+          document.documentElement.dataset.theme = theme;
+        } catch (_e) {
+          /* localStorage may be blocked; default to light */
+        }
+      })();
+    </script>
+    <!--
+      Theme-color literals mirror --color-paper in tokens.css for both schemes.
+      The HTML spec rejects var() inside meta[name="theme-color"], so the two
+      literals MUST move whenever the tokens move; visual-theme.md flags this.
+    -->
+    <meta name="theme-color" content="#f2efe9" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#14110d" media="(prefers-color-scheme: dark)" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <!--
+      Favicon — single SVG asset, scales from 16 px tab favicon up to
+      iOS home-screen size. `sizes="any"` is load-bearing: without it,
+      browsers (notably Chrome) treat the SVG as size-unknown and
+      prefer an auto-requested `/favicon.ico` over it. Since we don't
+      ship a `.ico` and that auto-request 404s, the absence of
+      `sizes="any"` lands the browser on its generic fallback icon
+      even though the SVG exists and the link tag is correct.
+    -->
+    <link rel="icon" type="image/svg+xml" sizes="any" href={`${basePath}/favicon.svg`} />
+
+    {noindex ? (
+      <>
+        <meta name="robots" content="noindex, follow" />
+        <meta name="googlebot" content="noindex, follow" />
+      </>
+    ) : (
+      <>
+        <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
+        <meta name="googlebot" content="index, follow" />
+      </>
+    )}
+    <meta name="generator" content="Astro" />
+    <meta name="application-name" content="openroles" />
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="openroles" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:locale" content="en_US" />
+
+    <!-- Twitter / X -->
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={description} />
+
+    <!-- JSON-LD: tells search engines this site is a job-listing aggregator
+         (WebSite) and surfaces the search action so SERPs can render the
+         sitelinks search box. The aggregator is not a JobPosting itself;
+         per-tenant pages can later add JobPosting structured data per role. -->
+    <script type="application/ld+json" is:inline set:html={jsonLdSafe({
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      name: "openroles",
+      url: `${siteRoot}/`,
+      description,
+      potentialAction: {
+        "@type": "SearchAction",
+        target: {
+          "@type": "EntryPoint",
+          urlTemplate: `${siteRoot}/?q={search_term_string}`,
+        },
+        "query-input": "required name=search_term_string",
+      },
+    })} />
+    <!-- (Theme init script moved above the CSS load to prevent first-paint flash.) -->
+  </head>
+  <body>
+    <Masthead
+      current={current}
+      totalRoles={totalRoles}
+      builtAtIso={builtAtIso}
+      basePath={basePath}
+      shortSha={shortSha}
+    />
+
+    <main id="main">
+      <slot />
+    </main>
+
+    <footer class="site-footer">
+      <p>
+        <!-- Source link. The masthead's build-SHA chip already points to
+             the exact commit shipped; this link points at the repo root
+             so visitors who didn't notice the SHA chip still have an
+             obvious affordance to read / fork / star the code. Octocat
+             mark + "SOURCE" caption — icon for discoverability, text for
+             the typographic system the rest of the chrome runs on. -->
+        <a
+          href={REPO_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="View source on GitHub"
+        >
+          <svg
+            class="gh-mark"
+            width="20"
+            height="20"
+            viewBox="0 0 16 16"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"
+            />
+          </svg>
+          <span>SOURCE</span>
+        </a>
+      </p>
+    </footer>
+
+    <!--
+      Theme-toggle wiring. Cycles light ↔ dark, persists to localStorage,
+      keeps the data-theme attribute on the document element in sync.
+    -->
+    <script is:inline>
+      (() => {
+        const btn = document.getElementById("theme-toggle");
+        if (!btn) return;
+        btn.addEventListener("click", () => {
+          const cur = document.documentElement.dataset.theme;
+          const next = cur === "dark" ? "light" : "dark";
+          document.documentElement.dataset.theme = next;
+          try {
+            localStorage.setItem("openroles:theme", next);
+          } catch (_e) {
+            /* localStorage may be blocked; toggle still works for the session */
+          }
+        });
+      })();
+    </script>
+
+    <style>
+      main#main {
+        max-width: 78rem;
+        margin: 0 auto;
+        padding: var(--space-5) var(--space-4) var(--space-8);
+      }
+
+      @media (min-width: 768px) {
+        main#main {
+          padding: var(--space-6) var(--space-7) var(--space-9);
+        }
+      }
+
+      .site-footer {
+        border-top: var(--rule-4) solid var(--color-rule);
+        padding: var(--space-4);
+      }
+
+      .site-footer p {
+        max-width: 78rem;
+        margin: 0 auto;
+        display: flex;
+        justify-content: center;
+      }
+
+      .site-footer a {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--space-2);
+        padding: 0 var(--space-3);
+        min-height: var(--tap);
+        min-width: var(--tap);
+        color: var(--color-accent);
+        font-family: var(--font-display);
+        font-size: var(--text-2);
+        font-weight: 700;
+        letter-spacing: var(--track-wide);
+        text-decoration: none;
+      }
+
+      .site-footer a:hover {
+        background: var(--color-ink);
+        color: var(--color-paper);
+      }
+
+      /* GitHub mark sized to sit on the type baseline. `currentColor`
+         on the SVG fill makes it follow the link's color through both
+         themes + the invert-on-hover state. */
+      .site-footer .gh-mark {
+        flex: 0 0 auto;
+        width: 20px;
+        height: 20px;
+      }
+
+      @media (min-width: 768px) {
+        .site-footer {
+          padding: var(--space-4) var(--space-7);
+        }
+      }
+    </style>
+
+    <!--
+      Service Worker registration. The SW caches the slim-index chunks
+      (content-hashed, immutable forever) and revalidates manifest.json
+      on every visit. Net effect: revisits cost ≈0 bytes for the
+      filter UI dataset. See site/public/sw.js for the cache strategy.
+
+      We register late (after first paint) so the SW install never
+      competes with the critical first-paint network. type="module"
+      keeps the SW scope to module workers and lets the browser parse
+      the registration script lazily.
+    -->
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          // BASE_URL is rewritten at build time. With the apex domain
+          // serving the app at root, BASE_URL is "/" and the scope is "/"
+          // — the SW owns the whole openroles.today origin.
+          const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+          navigator.serviceWorker
+            .register(`${base}/sw.js`, { scope: `${base}/` })
+            .catch(() => {
+              // SW registration failure is non-fatal — the site works
+              // without it, just slower on revisits.
+            });
+        });
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,192 @@
+name: Update Job Listings
+on:
+  schedule:
+    - cron: "33 7 * * *" # 3:33am EST
+  workflow_dispatch: # Manual trigger button
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 # 6 hours max to prevent hanging
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Pull yesterday's chunk data from the job-board-data repo into the working
+      # tree so merge_data.py can read existing jobs and merge into them.
+      # Without this, load_chunks("data") finds nothing and the merge discards
+      # all accumulated history, collapsing the dataset.
+
+      - name: Fetch existing data from data repo
+        run: |
+          git clone --depth 1 https://github.com/Feashliaa/job-board-data.git prev-data
+          mkdir -p data/chunks
+          cp -r prev-data/data/chunks/* data/chunks/ 2>/dev/null || true
+          cp prev-data/data/metadata.json data/metadata.json 2>/dev/null || true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12.10"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run job scraper
+        run: |
+          cd scripts
+          python scraper.py --source automated
+
+      - name: Merge with existing data
+        run: python scripts/merge_data.py
+
+      - name: Save trend snapshot
+        run: |
+          mkdir -p data/trends
+          DATE=$(date +'%Y-%m-%d')
+
+          # Per-platform breakdown from the scraper output
+          GREENHOUSE=$(jq '[.[] | select(.ats == "Greenhouse")] | length' scripts/output/all_jobs.json)
+          ASHBY=$(jq '[.[] | select(.ats == "Ashby")] | length' scripts/output/all_jobs.json)
+          BAMBOOHR=$(jq '[.[] | select(.ats == "BambooHR")] | length' scripts/output/all_jobs.json)
+          LEVER=$(jq '[.[] | select(.ats == "Lever")] | length' scripts/output/all_jobs.json)
+          WORKDAY=$(jq '[.[] | select(.ats == "Workday")] | length' scripts/output/all_jobs.json)
+          ICIMS=$(jq '[.[] | select(.ats == "iCIMS")] | length' scripts/output/all_jobs.json)
+          PAYLOCITY=$(jq '[.[] | select(.ats == "Paylocity")] | length' scripts/output/all_jobs.json)
+
+          # Tier breakdown
+          INTERN=$(jq '[.[] | select(.skill_level == "intern")] | length' scripts/output/all_jobs.json)
+          ENTRY=$(jq '[.[] | select(.skill_level == "entry")] | length' scripts/output/all_jobs.json)
+          MID=$(jq '[.[] | select(.skill_level == "mid")] | length' scripts/output/all_jobs.json)
+          SENIOR=$(jq '[.[] | select(.skill_level == "senior")] | length' scripts/output/all_jobs.json)
+
+          # Active companies count
+          COMPANIES=$(jq '. | length' scripts/output/active_companies.json)
+          RECRUITER=$(jq -r '.recruiter_jobs' scripts/output/metadata.json)
+
+          # -c forces compact single-line output so daily.jsonl stays valid JSONL
+          jq -nc \
+            --arg date "$DATE" \
+            --argjson total_jobs "$(jq -r '.total_jobs' data/metadata.json)" \
+            --argjson active_companies "$COMPANIES" \
+            --argjson recruiter_jobs "$RECRUITER" \
+            --argjson greenhouse "$GREENHOUSE" \
+            --argjson ashby "$ASHBY" \
+            --argjson bamboohr "$BAMBOOHR" \
+            --argjson lever "$LEVER" \
+            --argjson workday "$WORKDAY" \
+            --argjson icims "$ICIMS" \
+            --argjson paylocity "$PAYLOCITY" \
+            --argjson intern "$INTERN" \
+            --argjson entry "$ENTRY" \
+            --argjson mid "$MID" \
+            --argjson senior "$SENIOR" \
+            '{
+              date: $date,
+              total_jobs: $total_jobs,
+              active_companies: $active_companies,
+              recruiter_jobs: $recruiter_jobs,
+              by_platform: {
+                greenhouse: $greenhouse,
+                ashby: $ashby,
+                bamboohr: $bamboohr,
+                lever: $lever,
+                workday: $workday,
+                icims: $icims,
+                paylocity: $paylocity
+              },
+              by_tier: {
+                intern: $intern,
+                entry: $entry,
+                mid: $mid,
+                senior: $senior
+              }
+            }' >> data/trends/daily.jsonl
+      - name: Get job count and timestamp
+        id: metadata
+        run: |
+          JOBS=$(jq -r '.total_jobs' data/metadata.json)
+          COMPANIES=$(jq '. | length' scripts/output/active_companies.json)
+          DATE=$(date +'%Y-%m-%d %H:%M UTC')
+          echo "jobs=$JOBS" >> $GITHUB_OUTPUT
+          echo "companies=$COMPANIES" >> $GITHUB_OUTPUT
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "tag=$(date +'%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
+
+      - name: Compress release files
+        run: gzip -k scripts/output/all_jobs.json
+
+      - name: Clean old releases (keep last 10)
+        run: |
+          RELEASES=$(gh release list --limit 100 --json tagName -q '.[10:] | .[].tagName')
+          if [ -n "$RELEASES" ]; then
+            echo "$RELEASES" | while read tag; do
+              echo "Deleting release: $tag"
+              gh release delete "$tag" --cleanup-tag -y
+            done
+          else
+            echo "No old releases to clean up"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release with job data
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: jobs-${{ steps.metadata.outputs.tag }}
+          name: Jobs Update - ${{ steps.metadata.outputs.date }}
+          body: |
+            ## Job Board Update (Automated)
+            **Total Jobs:** ${{ steps.metadata.outputs.jobs }}  
+            **Active Companies:** ${{ steps.metadata.outputs.companies }}  
+            **Last Updated:** ${{ steps.metadata.outputs.date }}
+            The chunked job data is served from the `job-board-data` repo via GitHub Pages.
+          files: |
+            scripts/output/all_jobs.json.gz
+            scripts/output/active_companies.json
+            scripts/output/metadata.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Trend history is append-only and tiny; it stays tracked on main.
+      - name: Commit trend history to main
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add data/trends/daily.jsonl
+          git diff --staged --quiet || git commit -m "Trend snapshot $(date +'%Y-%m-%d')"
+          git pull --rebase --autostash origin main
+          git push origin main
+
+      - name: Check for platform anomalies
+        id: anomaly
+        continue-on-error: true
+        run: python scripts/check_anomalies.py
+
+      - name: Open issue on anomaly
+        if: steps.anomaly.outputs.anomaly == 'true'
+        run: |
+          gh issue create \
+            --title "Scraper anomaly $(date +'%Y-%m-%d')" \
+            --body "${{ steps.anomaly.outputs.report }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push regenerated data to data repo
+        run: |
+          git clone https://x-access-token:${DATA_REPO_TOKEN}@github.com/Feashliaa/job-board-data.git data-repo
+          cd data-repo
+          git checkout --orphan fresh
+          git rm -rf . > /dev/null 2>&1 || true
+          mkdir -p data/chunks .github
+          cp -r ../.github/data-repo-workflows .github/workflows
+          cp -r ../data/chunks/* data/chunks/
+          cp ../data/metadata.json data/metadata.json
+          cp ../data/README.md README.md
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add -A
+          git commit -m "Data snapshot $(date +'%Y-%m-%d %H:%M UTC')"
+          git branch -D main 2>/dev/null || true
+          git branch -m main
+          git push -f origin main
+        env:
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
