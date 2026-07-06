@@ -45,7 +45,7 @@ def process_ts_job(job):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--ts-input', help='Path to TS scraper outputs dir', required=True)
-    parser.add_argument('--py-input', help='Path to Python scraper all_jobs.json', required=True)
+    parser.add_argument('--py-input', help='Path to Python scraper all_jobs.json or a directory of .json.gz chunks', required=True)
     parser.add_argument('--output-dir', help='Path to output data dir (e.g., ui/data)', required=True)
     parser.add_argument('--commit-sha', help='GitHub commit SHA', default='local_run')
     args = parser.parse_args()
@@ -53,7 +53,25 @@ def main():
     all_jobs = {}
     
     # Load PY jobs
-    if os.path.exists(args.py_input):
+    if os.path.isdir(args.py_input):
+        # py_inputs is a directory of .json.gz files downloaded from upstream cache
+        for fname in os.listdir(args.py_input):
+            if fname.endswith('.json.gz') or fname.endswith('.json'):
+                path = os.path.join(args.py_input, fname)
+                try:
+                    open_func = gzip.open if fname.endswith('.gz') else open
+                    mode = 'rt' if fname.endswith('.gz') else 'r'
+                    with open_func(path, mode, encoding='utf-8') as f:
+                        py_jobs = json.load(f)
+                        for j in py_jobs:
+                            sj = convert_py_job(j)
+                            key = sj.get('i') or sj.get('u')
+                            if key and key not in all_jobs:
+                                all_jobs[key] = sj
+                except json.JSONDecodeError:
+                    pass
+    elif os.path.isfile(args.py_input):
+        # py_input is a single all_jobs.json file from the scraper
         with open(args.py_input, 'r', encoding='utf-8') as f:
             try:
                 py_jobs = json.load(f)
@@ -68,20 +86,25 @@ def main():
     # Load TS jobs (scrape-outputs directory)
     if os.path.exists(args.ts_input):
         for fname in os.listdir(args.ts_input):
-            if fname.endswith('.json'):
+            if fname.endswith('.json') or fname.endswith('.json.gz'):
                 path = os.path.join(args.ts_input, fname)
-                with open(path, 'r', encoding='utf-8') as f:
-                    try:
+                try:
+                    open_func = gzip.open if fname.endswith('.gz') else open
+                    mode = 'rt' if fname.endswith('.gz') else 'r'
+                    with open_func(path, mode, encoding='utf-8') as f:
                         ts_data = json.load(f)
                         ts_jobs = ts_data.get('jobs', [])
+                        # Some caches might just be a flat array instead of {jobs: []}
+                        if isinstance(ts_data, list):
+                            ts_jobs = ts_data
                         for j in ts_jobs:
                             sj = process_ts_job(j)
                             key = sj.get('i') or sj.get('u')
                             if key:
                                 # If duplicate, prefer TS data since it might be richer
                                 all_jobs[key] = sj
-                    except json.JSONDecodeError:
-                        pass
+                except json.JSONDecodeError:
+                    pass
 
     jobs_list = list(all_jobs.values())
     

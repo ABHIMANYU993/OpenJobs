@@ -21,9 +21,38 @@ env:
   USER_AGENT: "job_filters/1.0.0 (+https://github.com/icebyte/job_filters)"
 
 jobs:
+  check-cache:
+    name: Check Upstream Cache
+    runs-on: ubuntu-24.04
+    outputs:
+      use_cache: ${{ steps.cache_check.outputs.use_cache }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests
+      - name: Check and Fetch Cache
+        id: cache_check
+        run: python scripts/check_and_fetch_cache.py
+        continue-on-error: true
+      - name: Upload Cached Inputs
+        if: steps.cache_check.outputs.use_cache == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cached-inputs
+          path: |
+            ts_inputs/
+            py_inputs/
+          retention-days: 1
+
   scrape-ts:
     name: Scrape ${{ matrix.ats }}${{ matrix.total_shards && format(' (shard {0}/{1})', matrix.shard, matrix.total_shards) || '' }}
     runs-on: ubuntu-24.04
+    needs: check-cache
+    if: needs.check-cache.outputs.use_cache != 'true'
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -60,7 +89,6 @@ jobs:
           - brassring
           - gjobsfeed
           - oraclecloud
-          - jazzhr
           - phenom
           - hrmdirect
           - schoolspring
@@ -124,7 +152,7 @@ jobs:
           fi
 
           case "${{ matrix.ats }}" in
-            workable|jobvite|smartrecruiters|ultipro|greenhouse|lever|ashby|jazzhr|applitrack|hirebridge|workstream)
+            workable|jobvite|smartrecruiters|ultipro|greenhouse|lever|ashby|applitrack|hirebridge|workstream)
               concurrency_value=4 ;;
             *)
               concurrency_value=24 ;;
@@ -202,6 +230,8 @@ jobs:
   scrape-py:
     name: Scrape Python ATS
     runs-on: ubuntu-24.04
+    needs: check-cache
+    if: needs.check-cache.outputs.use_cache != 'true'
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -225,13 +255,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: scrape-py-all
-          path: py_scraper/output/all_jobs.json
+          path: py_scraper/scripts/output/all_jobs.json
           retention-days: 7
 
   build:
     name: Build Deduplicated DB
     runs-on: ubuntu-24.04
-    needs: [scrape-ts, scrape-py]
+    needs: [check-cache, scrape-ts, scrape-py]
+    # Run if cache hit, OR if scraping finished successfully
+    if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     steps:
       - uses: actions/checkout@v4
 
@@ -243,7 +275,15 @@ jobs:
       - name: Install pytz
         run: pip install pytz
 
+      - name: Download Cached Inputs
+        if: needs.check-cache.outputs.use_cache == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: cached-inputs
+          path: .
+
       - name: Download all TS scrape artifacts
+        if: needs.check-cache.outputs.use_cache != 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: scrape-ts-*
@@ -251,6 +291,7 @@ jobs:
           merge-multiple: true
 
       - name: Download PY scrape artifact
+        if: needs.check-cache.outputs.use_cache != 'true'
         uses: actions/download-artifact@v4
         with:
           name: scrape-py-all
@@ -261,9 +302,15 @@ jobs:
           mkdir -p ui/data
           SHA=${GITHUB_SHA::7}
           
+          # For py-input, pass directory if cached, else the specific file
+          PY_INPUT="py_inputs/all_jobs.json"
+          if [ "${{ needs.check-cache.outputs.use_cache }}" = "true" ]; then
+            PY_INPUT="py_inputs/"
+          fi
+
           python scripts/deduplicate.py \
             --ts-input ts_inputs \
-            --py-input py_inputs/all_jobs.json \
+            --py-input "$PY_INPUT" \
             --output-dir ui/data \
             --commit-sha "$SHA"
 

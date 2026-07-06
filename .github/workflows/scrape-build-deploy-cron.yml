@@ -1,8 +1,8 @@
-name: Scrape
+name: Scrape Build Deploy (Cron Trigger)
 
 on:
   schedule:
-    - cron: "39 3 * * *"
+    - cron: "30 22 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -11,6 +11,8 @@ concurrency:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 env:
   BUN_VERSION: "1.3.13"
@@ -18,9 +20,63 @@ env:
   USER_AGENT: "job_filters/1.0.0 (+https://github.com/icebyte/job_filters)"
 
 jobs:
+  check-schedule-and-cache:
+    name: Check Schedule & Cache
+    runs-on: ubuntu-24.04
+    outputs:
+      skip_schedule: ${{ steps.schedule_check.outputs.skip }}
+      use_cache: ${{ steps.cache_check.outputs.use_cache }}
+    steps:
+      - name: Check Every 2 Days Schedule
+        id: schedule_check
+        run: |
+          # Only apply modulo check on cron runs, not workflow_dispatch
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            # Calculate days since epoch
+            DAYS=$(( $(date +%s) / 86400 ))
+            # If modulo 2 is 0, skip today. (7th July is odd, so it will run on 7th July 22:30 UTC = 8th July 4AM IST)
+            if [ $(( DAYS % 2 )) -eq 0 ]; then
+              echo "Skipping run today to maintain 2-day cadence."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.schedule_check.outputs.skip != 'true'
+      
+      - name: Set up Python
+        if: steps.schedule_check.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        if: steps.schedule_check.outputs.skip != 'true'
+        run: pip install requests
+        
+      - name: Check and Fetch Cache
+        id: cache_check
+        if: steps.schedule_check.outputs.skip != 'true'
+        run: python scripts/check_and_fetch_cache.py
+        continue-on-error: true
+        
+      - name: Upload Cached Inputs
+        if: steps.schedule_check.outputs.skip != 'true' && steps.cache_check.outputs.use_cache == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cached-inputs
+          path: |
+            ts_inputs/
+            py_inputs/
+          retention-days: 1
+
   scrape-ts:
     name: Scrape ${{ matrix.ats }}${{ matrix.total_shards && format(' (shard {0}/{1})', matrix.shard, matrix.total_shards) || '' }}
     runs-on: ubuntu-24.04
+    needs: check-schedule-and-cache
+    if: needs.check-schedule-and-cache.outputs.skip != 'true' && needs.check-schedule-and-cache.outputs.use_cache != 'true'
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -57,7 +113,6 @@ jobs:
           - brassring
           - gjobsfeed
           - oraclecloud
-          - jazzhr
           - phenom
           - hrmdirect
           - schoolspring
@@ -121,7 +176,7 @@ jobs:
           fi
 
           case "${{ matrix.ats }}" in
-            workable|jobvite|smartrecruiters|ultipro|greenhouse|lever|ashby|jazzhr|applitrack|hirebridge|workstream)
+            workable|jobvite|smartrecruiters|ultipro|greenhouse|lever|ashby|applitrack|hirebridge|workstream)
               concurrency_value=4 ;;
             *)
               concurrency_value=24 ;;
@@ -199,6 +254,8 @@ jobs:
   scrape-py:
     name: Scrape Python ATS
     runs-on: ubuntu-24.04
+    needs: check-schedule-and-cache
+    if: needs.check-schedule-and-cache.outputs.skip != 'true' && needs.check-schedule-and-cache.outputs.use_cache != 'true'
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -206,7 +263,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install dependencies
         working-directory: py_scraper
@@ -222,5 +279,76 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: scrape-py-all
-          path: py_scraper/output/all_jobs.json
+          path: py_scraper/scripts/output/all_jobs.json
           retention-days: 7
+
+  build:
+    name: Build Deduplicated DB
+    runs-on: ubuntu-24.04
+    needs: [check-schedule-and-cache, scrape-ts, scrape-py]
+    if: always() && needs.check-schedule-and-cache.outputs.skip != 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pytz
+        run: pip install pytz
+
+      - name: Download Cached Inputs
+        if: needs.check-schedule-and-cache.outputs.use_cache == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: cached-inputs
+          path: .
+
+      - name: Download all TS scrape artifacts
+        if: needs.check-schedule-and-cache.outputs.use_cache != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: scrape-ts-*
+          path: ts_inputs
+          merge-multiple: true
+
+      - name: Download PY scrape artifact
+        if: needs.check-schedule-and-cache.outputs.use_cache != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: scrape-py-all
+          path: py_inputs
+
+      - name: Run deduplication
+        run: |
+          mkdir -p ui/data
+          SHA=${GITHUB_SHA::7}
+          
+          PY_INPUT="py_inputs/all_jobs.json"
+          if [ "${{ needs.check-schedule-and-cache.outputs.use_cache }}" = "true" ]; then
+            PY_INPUT="py_inputs/"
+          fi
+
+          python scripts/deduplicate.py \
+            --ts-input ts_inputs \
+            --py-input "$PY_INPUT" \
+            --output-dir ui/data \
+            --commit-sha "$SHA"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ui/
+
+  deploy:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-24.04
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
