@@ -2,7 +2,7 @@ name: Scrape
 
 on:
   schedule:
-    - cron: "17 5 * * *"
+    - cron: "39 3 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -206,7 +206,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         working-directory: py_scraper
