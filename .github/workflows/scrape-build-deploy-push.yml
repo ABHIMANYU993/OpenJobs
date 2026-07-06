@@ -1,0 +1,285 @@
+name: Scrape Build Deploy (Push Trigger)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+env:
+  BUN_VERSION: "1.3.13"
+  CONTACT_URL: "https://github.com/icebyte/job_filters"
+  USER_AGENT: "job_filters/1.0.0 (+https://github.com/icebyte/job_filters)"
+
+jobs:
+  scrape-ts:
+    name: Scrape ${{ matrix.ats }}${{ matrix.total_shards && format(' (shard {0}/{1})', matrix.shard, matrix.total_shards) || '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ats:
+          - greenhouse
+          - lever
+          - ashby
+          - bamboohr
+          - workday
+          - recruitee
+          - breezy
+          - personio
+          - workable
+          - smartrecruiters
+          - csod
+          - taleo
+          - ultipro
+          - jobvite
+          - zohorecruit
+          - talentlyft
+          - pinpointhq
+          - applicantpro
+          - applicantstack
+          - homerun
+          - factorial
+          - eightfold
+          - successfactors
+          - amazonjobs
+          - applejobs
+          - tiktokcareers
+          - metacareers
+          - jsonld
+          - brassring
+          - gjobsfeed
+          - oraclecloud
+          - jazzhr
+          - phenom
+          - hrmdirect
+          - schoolspring
+          - isolvedhire
+          - applitrack
+          - hiringthing
+          - apploi
+          - hirebridge
+          - taleotbe
+          - workstream
+          - careerplug
+          - jibeapply
+          - hireology
+          - applicantpool
+          - pageup
+          - manatal
+          - rippling
+        include:
+          - ats: icims
+            shard: 0
+            total_shards: 2
+          - ats: icims
+            shard: 1
+            total_shards: 2
+          - ats: teamtailor
+            shard: 0
+            total_shards: 2
+          - ats: teamtailor
+            shard: 1
+            total_shards: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        working-directory: ts_scraper
+        run: bun install
+
+      - name: Build scrape input for ${{ matrix.ats }}
+        id: input
+        working-directory: ts_scraper
+        env:
+          SHARD: ${{ matrix.shard }}
+          TOTAL_SHARDS: ${{ matrix.total_shards }}
+        run: |
+          if [ -n "$SHARD" ]; then
+            shard_id="${{ matrix.ats }}-${SHARD}"
+          else
+            shard_id="${{ matrix.ats }}"
+          fi
+          echo "shard_id=${shard_id}" >> "$GITHUB_OUTPUT"
+
+          tenants_file="data/tenants/${{ matrix.ats }}.json"
+          if [ ! -s "$tenants_file" ]; then
+            echo "::notice::${tenants_file} missing or empty"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          case "${{ matrix.ats }}" in
+            workable|jobvite|smartrecruiters|ultipro|greenhouse|lever|ashby|jazzhr|applitrack|hirebridge|workstream)
+              concurrency_value=4 ;;
+            *)
+              concurrency_value=24 ;;
+          esac
+
+          cutoff_iso="$(date -u -d "30 days ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c 'from datetime import datetime,timedelta,timezone; print((datetime.now(timezone.utc)-timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+          shard_n="${SHARD:-0}"
+          total_n="${TOTAL_SHARDS:-1}"
+          live="$(jq --arg cutoff "$cutoff_iso" \
+                    --argjson shard "$shard_n" \
+                    --argjson total "$total_n" '
+            [.[] | select(
+              .status == "live" and
+              ((.last_probed_at // "1970-01-01T00:00:00Z") > $cutoff) and
+              ((.slug | explode | add) % $total == $shard)
+            )] | length
+          ' "$tenants_file")"
+          if [ "$live" -eq 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p data/scrape-inputs data/scrape-outputs
+          jq --arg ats "${{ matrix.ats }}" \
+             --arg ua "$USER_AGENT" \
+             --arg contact "$CONTACT_URL" \
+             --argjson concurrency "$concurrency_value" \
+             --arg cutoff "$cutoff_iso" \
+             --argjson shard "$shard_n" \
+             --argjson total "$total_n" '
+            {
+              ats: $ats,
+              userAgent: $ua,
+              contactUrl: $contact,
+              concurrency: $concurrency,
+              retry: { maxAttempts: 3, baseMs: 500, maxMs: 30000 },
+              tenants: [
+                .[]
+                | select(
+                    .status == "live" and
+                    ((.last_probed_at // "1970-01-01T00:00:00Z") > $cutoff) and
+                    ((.slug | explode | add) % $total == $shard)
+                  )
+                | (
+                    if (.metadata // null) == null
+                    then { slug: .slug }
+                    else { slug: .slug, metadata: .metadata }
+                    end
+                  )
+              ]
+            }
+          ' "$tenants_file" > "data/scrape-inputs/${shard_id}.json"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Scrape ${{ matrix.ats }}
+        if: steps.input.outputs.skip != 'true'
+        working-directory: ts_scraper
+        env:
+          SHARD_ID: ${{ steps.input.outputs.shard_id }}
+        run: |
+          input="${GITHUB_WORKSPACE}/ts_scraper/data/scrape-inputs/${SHARD_ID}.json"
+          output="${GITHUB_WORKSPACE}/ts_scraper/data/scrape-outputs/${SHARD_ID}.json"
+          if ! bun run scrape --input "$input" --output "$output"; then
+            echo "::warning::scrape ${SHARD_ID} failed; downstream build will skip this shard"
+            rm -f "$output"
+          fi
+
+      - name: Upload scrape output for ${{ matrix.ats }}
+        if: steps.input.outputs.skip != 'true' && hashFiles(format('ts_scraper/data/scrape-outputs/{0}.json', steps.input.outputs.shard_id)) != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrape-ts-${{ steps.input.outputs.shard_id }}
+          path: ts_scraper/data/scrape-outputs/${{ steps.input.outputs.shard_id }}.json
+          retention-days: 7
+
+  scrape-py:
+    name: Scrape Python ATS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: py_scraper
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Python Scraper
+        working-directory: py_scraper
+        run: |
+          python scripts/scraper.py --source automated
+
+      - name: Upload python scrape output
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrape-py-all
+          path: py_scraper/output/all_jobs.json
+          retention-days: 7
+
+  build:
+    name: Build Deduplicated DB
+    runs-on: ubuntu-24.04
+    needs: [scrape-ts, scrape-py]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pytz
+        run: pip install pytz
+
+      - name: Download all TS scrape artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: scrape-ts-*
+          path: ts_inputs
+          merge-multiple: true
+
+      - name: Download PY scrape artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: scrape-py-all
+          path: py_inputs
+
+      - name: Run deduplication
+        run: |
+          mkdir -p ui/data
+          SHA=${GITHUB_SHA::7}
+          
+          python scripts/deduplicate.py \
+            --ts-input ts_inputs \
+            --py-input py_inputs/all_jobs.json \
+            --output-dir ui/data \
+            --commit-sha "$SHA"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ui/
+
+  deploy:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-24.04
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
