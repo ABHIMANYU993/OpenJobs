@@ -2,7 +2,7 @@ name: Scrape Build Deploy (Cron Trigger)
 
 on:
   schedule:
-    - cron: "30 22 * * *"
+    - cron: "30 23 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -21,22 +21,20 @@ env:
 
 jobs:
   check-schedule-and-cache:
-    name: Check Schedule & Cache
+    name: Smart Cache Check (3-Day)
     runs-on: ubuntu-24.04
     outputs:
-      skip: ${{ steps.schedule_check.outputs.skip }}
+      skip: ${{ steps.cache_check.outputs.skip_all || steps.schedule_check.outputs.skip }}
       use_cache: ${{ steps.cache_check.outputs.use_cache }}
     steps:
-      - name: Check Every 2 Days Schedule
+      - name: Check Every 3 Days Schedule
         id: schedule_check
         run: |
-          # Only apply modulo check on cron runs, not workflow_dispatch
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            # Calculate days since epoch
             DAYS=$(( $(date +%s) / 86400 ))
-            # If modulo 2 is 0, skip today. (7th July is odd, so it will run on 7th July 22:30 UTC = 8th July 4AM IST)
-            if [ $(( DAYS % 2 )) -eq 0 ]; then
-              echo "Skipping run today to maintain 2-day cadence."
+            # July 7, 2026 is Day % 3 == 1. Target is July 10 (Day % 3 == 1).
+            if [ $(( DAYS % 3 )) -ne 1 ]; then
+              echo "Skipping run today to maintain 3-day cadence."
               echo "skip=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -56,11 +54,10 @@ jobs:
         if: steps.schedule_check.outputs.skip != 'true'
         run: pip install requests
         
-      - name: Check and Fetch Cache
+      - name: Smart Cache Check
         id: cache_check
         if: steps.schedule_check.outputs.skip != 'true'
-        run: python scripts/check_and_fetch_cache.py
-        continue-on-error: true
+        run: python scripts/smart_cache_check.py --mode 3-day
         
       - name: Upload Cached Inputs
         if: steps.schedule_check.outputs.skip != 'true' && steps.cache_check.outputs.use_cache == 'true'
@@ -70,6 +67,7 @@ jobs:
           path: |
             ts_inputs/
             py_inputs/
+            upstream_metadata.json
           retention-days: 1
 
   scrape-ts:

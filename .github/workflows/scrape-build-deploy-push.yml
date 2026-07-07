@@ -21,10 +21,11 @@ env:
   USER_AGENT: "job_filters/1.0.0 (+https://github.com/icebyte/job_filters)"
 
 jobs:
-  check-cache:
-    name: Check Upstream Cache
+  check-schedule-and-cache:
+    name: Smart Cache Check (Push)
     runs-on: ubuntu-24.04
     outputs:
+      skip: ${{ steps.cache_check.outputs.skip_all }}
       use_cache: ${{ steps.cache_check.outputs.use_cache }}
     steps:
       - uses: actions/checkout@v4
@@ -34,10 +35,9 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install requests
-      - name: Check and Fetch Cache
+      - name: Smart Cache Check
         id: cache_check
-        run: python scripts/check_and_fetch_cache.py
-        continue-on-error: true
+        run: python scripts/smart_cache_check.py --mode push
       - name: Upload Cached Inputs
         if: steps.cache_check.outputs.use_cache == 'true'
         uses: actions/upload-artifact@v4
@@ -46,13 +46,14 @@ jobs:
           path: |
             ts_inputs/
             py_inputs/
+            upstream_metadata.json
           retention-days: 1
 
   scrape-ts:
     name: Scrape ${{ matrix.ats }}${{ matrix.total_shards && format(' (shard {0}/{1})', matrix.shard, matrix.total_shards) || '' }}
     runs-on: ubuntu-24.04
-    needs: check-cache
-    if: needs.check-cache.outputs.use_cache != 'true'
+    needs: check-schedule-and-cache
+    if: needs.check-schedule-and-cache.outputs.skip != 'true' && needs.check-schedule-and-cache.outputs.use_cache != 'true'
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -230,8 +231,8 @@ jobs:
   scrape-py:
     name: Scrape Python ATS
     runs-on: ubuntu-24.04
-    needs: check-cache
-    if: needs.check-cache.outputs.use_cache != 'true'
+    needs: check-schedule-and-cache
+    if: needs.check-schedule-and-cache.outputs.skip != 'true' && needs.check-schedule-and-cache.outputs.use_cache != 'true'
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -261,9 +262,8 @@ jobs:
   build:
     name: Build Deduplicated DB
     runs-on: ubuntu-24.04
-    needs: [check-cache, scrape-ts, scrape-py]
-    # Run if cache hit, OR if scraping finished successfully
-    if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    needs: [check-schedule-and-cache, scrape-ts, scrape-py]
+    if: always() && needs.check-schedule-and-cache.outputs.skip != 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     steps:
       - uses: actions/checkout@v4
 
@@ -276,14 +276,14 @@ jobs:
         run: pip install pytz
 
       - name: Download Cached Inputs
-        if: needs.check-cache.outputs.use_cache == 'true'
+        if: needs.check-schedule-and-cache.outputs.use_cache == 'true'
         uses: actions/download-artifact@v4
         with:
           name: cached-inputs
           path: .
 
       - name: Download all TS scrape artifacts
-        if: needs.check-cache.outputs.use_cache != 'true'
+        if: needs.check-schedule-and-cache.outputs.use_cache != 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: scrape-ts-*
@@ -291,7 +291,7 @@ jobs:
           merge-multiple: true
 
       - name: Download PY scrape artifact
-        if: needs.check-cache.outputs.use_cache != 'true'
+        if: needs.check-schedule-and-cache.outputs.use_cache != 'true'
         uses: actions/download-artifact@v4
         with:
           name: scrape-py-all
@@ -302,9 +302,8 @@ jobs:
           mkdir -p ui/data
           SHA=${GITHUB_SHA::7}
           
-          # For py-input, pass directory if cached, else the specific file
           PY_INPUT="py_inputs/all_jobs.json"
-          if [ "${{ needs.check-cache.outputs.use_cache }}" = "true" ]; then
+          if [ "${{ needs.check-schedule-and-cache.outputs.use_cache }}" = "true" ]; then
             PY_INPUT="py_inputs/"
           fi
 

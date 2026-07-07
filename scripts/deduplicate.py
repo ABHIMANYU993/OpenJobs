@@ -141,6 +141,16 @@ def main():
         'short_sha': args.commit_sha
     }
     
+    # Inject upstream metadata if we downloaded cache
+    if os.path.exists("upstream_metadata.json"):
+        try:
+            with open("upstream_metadata.json", "r") as f:
+                meta = json.load(f)
+                manifest['ts_upstream_sha'] = meta.get('ts_upstream_sha')
+                manifest['py_upstream_date'] = meta.get('py_upstream_date')
+        except:
+            pass
+    
     manifest_path = os.path.join(args.output_dir, 'manifest.json')
     with open(manifest_path, 'w', encoding='utf-8') as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
