@@ -29,15 +29,26 @@ jobs:
       use_cache: ${{ steps.cache_check.outputs.use_cache }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install requests
+      - name: Check for UI changes
+        id: ui_changes
+        run: |
+          if git diff --name-only HEAD~1 HEAD | grep -q "^ui/"; then
+            echo "ui_changed=--ui-changed" >> "$GITHUB_OUTPUT"
+          else
+            echo "ui_changed=" >> "$GITHUB_OUTPUT"
+          fi
+        continue-on-error: true
       - name: Smart Cache Check
         id: cache_check
-        run: python scripts/smart_cache_check.py --mode push
+        run: python scripts/smart_cache_check.py --mode push ${{ steps.ui_changes.outputs.ui_changed }}
       - name: Upload Cached Inputs
         if: steps.cache_check.outputs.use_cache == 'true'
         uses: actions/upload-artifact@v4

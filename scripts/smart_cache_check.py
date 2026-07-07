@@ -46,6 +46,7 @@ def write_github_output(key, value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', choices=['daily', '3-day', 'push'], required=True)
+    parser.add_argument('--ui-changed', action='store_true')
     args = parser.parse_args()
 
     print(f"Running smart cache check in {args.mode} mode.")
@@ -114,10 +115,14 @@ def main():
     print(f"Decided action: {action}")
 
     if action == 'skip':
-        print("Aborting workflow early. We have the latest valid data.")
-        write_github_output("skip_all", "true")
-        write_github_output("use_cache", "false")
-        sys.exit(0)
+        if args.ui_changed:
+            print("UI changes detected! Upgrading action from 'skip' to 'cache' to ensure deployment.")
+            action = 'cache'
+        else:
+            print("Aborting workflow early. We have the latest valid data and no UI changes.")
+            write_github_output("skip_all", "true")
+            write_github_output("use_cache", "false")
+            sys.exit(0)
         
     elif action == 'scrape':
         print("Proceeding to scrape full data.")
