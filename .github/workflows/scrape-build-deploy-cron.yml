@@ -24,7 +24,7 @@ jobs:
     name: Check Schedule & Cache
     runs-on: ubuntu-24.04
     outputs:
-      skip_schedule: ${{ steps.schedule_check.outputs.skip }}
+      skip: ${{ steps.schedule_check.outputs.skip }}
       use_cache: ${{ steps.cache_check.outputs.use_cache }}
     steps:
       - name: Check Every 2 Days Schedule
