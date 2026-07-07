@@ -114,15 +114,15 @@ def main():
 
     print(f"Decided action: {action}")
 
+    if action == 'skip' and args.ui_changed:
+        print("UI changes detected! Upgrading action from 'skip' to 'cache' to ensure deployment.")
+        action = 'cache'
+
     if action == 'skip':
-        if args.ui_changed:
-            print("UI changes detected! Upgrading action from 'skip' to 'cache' to ensure deployment.")
-            action = 'cache'
-        else:
-            print("Aborting workflow early. We have the latest valid data and no UI changes.")
-            write_github_output("skip_all", "true")
-            write_github_output("use_cache", "false")
-            sys.exit(0)
+        print("Aborting workflow early. We have the latest valid data and no UI changes.")
+        write_github_output("skip_all", "true")
+        write_github_output("use_cache", "false")
+        sys.exit(0)
         
     elif action == 'scrape':
         print("Proceeding to scrape full data.")
