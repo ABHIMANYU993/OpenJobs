@@ -100,21 +100,14 @@ def main():
             else:
                 action = 'scrape'
     else:
-        remote_is_newer = max(ts_time, py_time) > our_scrape_time
-        print(f"Remote is newer than our scrape time: {remote_is_newer}")
-        
-        if remote_is_newer:
-            if ts_age_hours < 48 and py_age_hours < 48:
-                action = 'cache'
-            else:
-                if args.mode == 'daily':
-                    action = 'cache'
-                else:
-                    action = 'scrape'
+        print(f"Not in sync. Checking if remote caches are fresh (< 48h)...")
+        if ts_age_hours < 48 and py_age_hours < 48:
+            print("Both remote caches are fresh. Using cache!")
+            action = 'cache'
         else:
-            # We are newer!
+            print("One or both remote caches are stale (> 48h).")
             if args.mode == 'daily':
-                action = 'skip'
+                action = 'cache'
             else:
                 action = 'scrape'
 
