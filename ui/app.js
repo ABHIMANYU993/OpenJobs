@@ -292,6 +292,36 @@ function requestPage() {
 
 // --- UI Updaters ---
 function updateFacetDOMCounts(counts) {
+    // Dynamically generate ATS checkboxes if they don't exist
+    if (counts.ats) {
+        const atsContainer = document.getElementById('acc-ats');
+        if (atsContainer) {
+            const atsKeys = Object.keys(counts.ats).sort((a, b) => counts.ats[b] - counts.ats[a]);
+            atsKeys.forEach(val => {
+                let cb = document.querySelector(`input[data-facet="ats"][value="${val}"]`);
+                if (!cb) {
+                    const row = document.createElement('label');
+                    row.className = 'filter-checkbox-row';
+                    row.innerHTML = `
+                        <input type="checkbox" value="${escapeHTML(val)}" data-facet="ats" />
+                        <span class="checkbox-visual"></span>
+                        <span class="checkbox-label">${escapeHTML(val).toUpperCase()}</span>
+                        <span class="facet-count" id="count-ats-${escapeHTML(val)}">0</span>
+                    `;
+                    atsContainer.appendChild(row);
+                    cb = row.querySelector('input');
+                    cb.addEventListener('change', () => {
+                        const set = new Set(state['ats']);
+                        if (cb.checked) set.add(val);
+                        else set.delete(val);
+                        state['ats'] = Array.from(set);
+                        applyFilters();
+                    });
+                }
+            });
+        }
+    }
+
     ['workplace', 'level', 'ats', 'posted'].forEach(facetCat => {
         const cbs = document.querySelectorAll(`input[data-facet="${facetCat}"]`);
         cbs.forEach(cb => {
@@ -372,6 +402,19 @@ function clearAllFilters() {
     applyFilters();
 }
 
+function formatISTTimeAgo(postedAtStr) {
+    if (!postedAtStr) return 'Unknown';
+    const postedTime = new Date(postedAtStr).getTime();
+    if (isNaN(postedTime)) return 'Unknown';
+    const diffHours = Math.floor((Date.now() - postedTime) / (1000 * 60 * 60));
+    
+    if (diffHours < 1) return 'now';
+    if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays >= 30) return '30+ days ago';
+    return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+}
+
 function renderPageDOM(jobs, page, totalPages) {
     DOM.ledgerRows.innerHTML = '';
     const fragment = document.createDocumentFragment();
@@ -388,8 +431,8 @@ function renderPageDOM(jobs, page, totalPages) {
         if (isSaved) badgeHtml += `<span class="ledger-badge badge-saved">[SAVED]</span>`;
         if (isApplied) badgeHtml += `<span class="ledger-badge badge-applied">[APPLIED]</span>`;
         
-        const isRemote = job.w === 'remote' || (job.loc || '').toLowerCase().includes('remote');
-        const locationText = isRemote ? 'Remote' : (job.loc || 'Unspecified');
+        const isRemote = job.remote || (job.location || '').toLowerCase().includes('remote');
+        const locationText = isRemote ? 'Remote' : (job.location || 'Unspecified');
         
         const row = document.createElement('div');
         row.className = `ledger-row ${isIgnored ? 'ignored' : ''}`;
@@ -398,12 +441,12 @@ function renderPageDOM(jobs, page, totalPages) {
             <div class="ledger-cell">
                 <div class="role-cell-wrapper">
                     <div class="role-title-row">
-                        <a href="${job.u || '#'}" target="_blank" rel="noopener noreferrer" class="role-title-link">
-                            ${escapeHTML(job.ti || 'Untitled Position')}
+                        <a href="${job.url || '#'}" target="_blank" rel="noopener noreferrer" class="role-title-link">
+                            ${escapeHTML(job.title || 'Untitled Position')}
                         </a>
                         <div class="badge-wrapper">${badgeHtml}</div>
                     </div>
-                    <span class="company-title">${escapeHTML(job.c || 'Unknown')}</span>
+                    <span class="company-title">${escapeHTML(job.company || 'Unknown')}</span>
                 </div>
             </div>
             <div class="ledger-cell">
@@ -413,7 +456,7 @@ function renderPageDOM(jobs, page, totalPages) {
                 <span class="level-mono">${escapeHTML(job.inferredLevel)}</span>
             </div>
             <div class="ledger-cell">
-                <span class="posted-mono">${job.diffDays === 0 ? 'Today' : job.diffDays === 1 ? '1d ago' : `${job.diffDays}d ago`}</span>
+                <span class="posted-mono">${formatISTTimeAgo(job.posted_at || job.scrape_time)}</span>
             </div>
             <div class="ledger-cell actions-cell">
                 <button class="action-btn-glyph btn-glyph-save ${isSaved ? 'active' : ''}" title="Save Role">

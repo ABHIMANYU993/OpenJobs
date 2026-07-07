@@ -9,38 +9,68 @@ import pytz
 IST = pytz.timezone('Asia/Kolkata')
 
 def convert_py_job(job):
-    # Convert py_scraper job dict to ts_scraper short format
-    short_job = {}
+    # Convert py_scraper job dict to standardized full-key format
+    std_job = {}
     
     # ID / URL
-    short_job['i'] = job.get('id') or str(hash(job.get('url', ''))) # Fallback to hash of URL if no ID
-    short_job['u'] = job.get('url', '')
+    std_job['id'] = job.get('id') or str(hash(job.get('url', ''))) # Fallback to hash of URL if no ID
+    std_job['url'] = job.get('url', '')
     
-    short_job['ti'] = job.get('title', '')
-    short_job['c'] = job.get('company', '')
-    short_job['loc'] = job.get('location', '')
-    short_job['ats'] = job.get('ats', '')
-    short_job['l'] = job.get('skill_level', '')
+    std_job['title'] = job.get('title', '')
+    std_job['company'] = job.get('company', '')
+    std_job['location'] = job.get('location', '')
+    std_job['ats'] = job.get('ats', '')
+    std_job['level'] = job.get('skill_level', '')
+    std_job['remote'] = job.get('remote', False)
+    std_job['salary'] = job.get('salary', None)
     
-    # Dates
-    short_job['p'] = job.get('updated_at')
-    short_job['f'] = job.get('first_seen')
+    # Dates (map first_seen or updated_at to posted_at)
+    std_job['posted_at'] = job.get('first_seen') or job.get('updated_at')
+    
+    # Add metadata (keep original metadata in standard schema if needed)
+    now_ist = datetime.now(IST).isoformat()
+    std_job['scrape_time'] = job.get('scraped_at', now_ist)
+    std_job['modified_time'] = now_ist
+    std_job['last_time'] = now_ist
+    
+    # Transfer any extra keys from job to std_job
+    for k, v in job.items():
+        if k not in ['id', 'url', 'title', 'company', 'location', 'ats', 'skill_level', 'first_seen', 'updated_at', 'scraped_at', 'remote', 'salary']:
+            std_job[k] = v
+            
+    return std_job
+
+def process_ts_job(job):
+    std_job = {}
+    # Shortkeys to Fullkeys
+    std_job['id'] = job.get('i') or job.get('id') or str(hash(job.get('u', '')))
+    std_job['url'] = job.get('u') or job.get('url', '')
+    std_job['title'] = job.get('ti') or job.get('title', '')
+    std_job['company'] = job.get('c') or job.get('company', '')
+    std_job['location'] = job.get('loc') or job.get('location', '')
+    std_job['ats'] = job.get('a') or job.get('ats', '')
+    std_job['level'] = job.get('l') or job.get('level', '')
+    
+    is_remote = False
+    if job.get('w') == 'remote' or str(job.get('loc', '')).lower() == 'remote':
+        is_remote = True
+    std_job['remote'] = is_remote
+    std_job['salary'] = job.get('cur') or job.get('salary')
+    
+    std_job['posted_at'] = job.get('p') or job.get('posted_at')
     
     # Add metadata
     now_ist = datetime.now(IST).isoformat()
-    short_job['scrape_time'] = job.get('scraped_at', now_ist)
-    short_job['modified_time'] = now_ist
-    short_job['last_time'] = now_ist
+    std_job['scrape_time'] = job.get('scrape_time', now_ist)
+    std_job['modified_time'] = now_ist
+    std_job['last_time'] = now_ist
     
-    return short_job
-
-def process_ts_job(job):
-    # Ensure metadata exists
-    now_ist = datetime.now(IST).isoformat()
-    job['scrape_time'] = job.get('scrape_time', now_ist)
-    job['modified_time'] = job.get('modified_time', now_ist)
-    job['last_time'] = job.get('last_time', now_ist)
-    return job
+    # Transfer other raw fields
+    for k, v in job.items():
+        if k not in ['i', 'u', 'ti', 'c', 'loc', 'a', 'l', 'w', 'cur', 'p', 'scrape_time', 'modified_time', 'last_time']:
+            std_job[k] = v
+            
+    return std_job
 
 def main():
     parser = argparse.ArgumentParser()
@@ -65,7 +95,7 @@ def main():
                         py_jobs = json.load(f)
                         for j in py_jobs:
                             sj = convert_py_job(j)
-                            key = sj.get('i') or sj.get('u')
+                            key = sj.get('id') or sj.get('url')
                             if key and key not in all_jobs:
                                 all_jobs[key] = sj
                 except json.JSONDecodeError:
@@ -77,7 +107,7 @@ def main():
                 py_jobs = json.load(f)
                 for j in py_jobs:
                     sj = convert_py_job(j)
-                    key = sj.get('i') or sj.get('u')
+                    key = sj.get('id') or sj.get('url')
                     if key and key not in all_jobs:
                         all_jobs[key] = sj
             except json.JSONDecodeError:
@@ -99,7 +129,7 @@ def main():
                             ts_jobs = ts_data
                         for j in ts_jobs:
                             sj = process_ts_job(j)
-                            key = sj.get('i') or sj.get('u')
+                            key = sj.get('id') or sj.get('url')
                             if key:
                                 # If duplicate, prefer TS data since it might be richer
                                 all_jobs[key] = sj
@@ -109,7 +139,7 @@ def main():
     jobs_list = list(all_jobs.values())
     
     # Sort for deterministic chunking (by company then title)
-    jobs_list.sort(key=lambda x: (x.get('c', '').lower(), x.get('ti', '').lower()))
+    jobs_list.sort(key=lambda x: (x.get('company', '').lower(), x.get('title', '').lower()))
     
     chunk_dir = os.path.join(args.output_dir, 'chunk')
     os.makedirs(chunk_dir, exist_ok=True)

@@ -94,27 +94,25 @@ self.addEventListener('message', async (e) => {
                     const job = chunk[i];
                     
                     // Pre-calculate properties for blazing fast filtering
-                    const ti = (job.ti || '').toLowerCase();
-                    const c = (job.c || '').toLowerCase();
-                    const loc = (job.loc || '').toLowerCase();
+                    const ti = (job.title || '').toLowerCase();
+                    const c = (job.company || '').toLowerCase();
+                    const loc = (job.location || '').toLowerCase();
                     
                     job.inferredCategory = inferCategory(ti);
-                    job.inferredLevel = inferLevel(ti, job.l || '');
-                    job.id = `${job.ti || ''}-${job.c || ''}-${indexCounter}`.replace(/\s+/g, '-').toLowerCase();
-                    job.comp = 80000 + ((indexCounter * 17) % 15) * 10000;
+                    job.inferredLevel = inferLevel(ti, job.level || '');
+                    job.id = job.id || `${job.title || ''}-${job.company || ''}-${indexCounter}`.replace(/\s+/g, '-').toLowerCase();
+                    job.comp = job.salary || (80000 + ((indexCounter * 17) % 15) * 10000);
                     job.isRecruiter = (indexCounter % 10 === 0) || c.match(/staffing|agency|group|recruiting|global/) !== null;
                     job.isVerified = (indexCounter % 8 !== 0);
                     
-                    const url = (job.u || '').toLowerCase();
-                    if (url.includes('greenhouse.io') || url.includes('boards.greenhouse.io')) job.ats = 'greenhouse';
-                    else if (url.includes('lever.co')) job.ats = 'lever';
-                    else if (url.includes('myworkdayjobs')) job.ats = 'workday';
-                    else job.ats = 'other';
+                    const atsName = (job.ats || 'other').toLowerCase();
+                    job.ats = atsName;
                     
-                    const isRemote = job.w === 'remote' || loc.includes('remote');
+                    const isRemote = job.remote || loc.includes('remote');
                     job.w_type = isRemote ? 'remote' : 'onsite';
                     
-                    const dateObj = job.ist_scraped_at ? new Date(job.ist_scraped_at).getTime() : now;
+                    const postedStr = job.posted_at || job.scrape_time || job.last_time || job.ist_scraped_at;
+                    const dateObj = postedStr ? new Date(postedStr).getTime() : now;
                     job.diffDays = Math.floor((now - dateObj) / (1000 * 60 * 60 * 24));
                     job.ts = dateObj;
                     
@@ -142,7 +140,7 @@ self.addEventListener('message', async (e) => {
         // Setup Facet Counters
         let f_wp = { remote: 0, onsite: 0 };
         let f_lvl = { entry: 0, mid: 0, senior: 0, executive: 0 };
-        let f_ats = { greenhouse: 0, lever: 0, workday: 0, other: 0 };
+        let f_ats = {};
         let f_pos = { '24h': 0, '3d': 0, '7d': 0 };
         
         // Parse search query once
@@ -223,8 +221,8 @@ self.addEventListener('message', async (e) => {
             if (mWorkplace && mAts && mPosted) {
                 if (f_lvl[job.inferredLevel] !== undefined) f_lvl[job.inferredLevel]++;
             }
-            if (mWorkplace && mLevel && mPosted) {
-                if (f_ats[job.ats] !== undefined) f_ats[job.ats]++;
+            if (mLevel && mPosted && mWorkplace) {
+                f_ats[job.ats] = (f_ats[job.ats] || 0) + 1;
             }
             if (mWorkplace && mLevel && mAts) {
                 if (job.diffDays <= 1) f_pos['24h']++;
