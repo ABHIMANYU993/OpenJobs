@@ -786,3 +786,32 @@ body {
         display: none;
     }
 }
+
+/* Page Size Selector */
+.page-size-selector {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.compact-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+.compact-select {
+    background: var(--bg-surface);
+    color: var(--text-bright);
+    border: 1px solid var(--border-color);
+    padding: 0.2rem 0.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    outline: none;
+    cursor: pointer;
+}
+.pagination-buttons {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+.ledger-footer {
+    justify-content: space-between;
+}

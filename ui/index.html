@@ -297,9 +297,21 @@
 
                 <!-- Pagination Footer -->
                 <footer class="ledger-footer" id="pagination-controls">
-                    <button id="btn-prev" class="ledger-page-btn" disabled>[ PREVIOUS ]</button>
-                    <div id="page-indicator" class="ledger-page-indicator">01 / 01</div>
-                    <button id="btn-next" class="ledger-page-btn">[ NEXT ]</button>
+                    <div class="page-size-selector">
+                        <label for="select-page-size" class="compact-label">PER PAGE:</label>
+                        <select id="select-page-size" class="compact-select">
+                            <option value="10">10</option>
+                            <option value="15" selected>15</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                            <option value="500">500</option>
+                        </select>
+                    </div>
+                    <div class="pagination-buttons">
+                        <button id="btn-prev" class="ledger-page-btn" disabled>[ PREVIOUS ]</button>
+                        <div id="page-indicator" class="ledger-page-indicator">01 / 01</div>
+                        <button id="btn-next" class="ledger-page-btn">[ NEXT ]</button>
+                    </div>
                 </footer>
 
             </main>

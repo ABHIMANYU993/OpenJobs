@@ -1,7 +1,5 @@
 // Global State Configuration
 const state = {
-    allJobs: [],
-    filteredJobs: [],
     currentPage: 1,
     pageSize: 15,
     searchMode: 'free', // 'free' or 'structured'
@@ -12,11 +10,11 @@ const state = {
     structCompany: '',
     structLocation: '',
     
-    // Facet selections (Sets)
-    workplace: new Set(),
-    posted: new Set(),
-    level: new Set(),
-    ats: new Set(),
+    // Facet selections (Arrays for easy serialization to worker)
+    workplace: [],
+    posted: [],
+    level: [],
+    ats: [],
     minComp: 0,
     
     // Boolean toggles
@@ -41,16 +39,22 @@ const Storage = {
     
     save(key, set) {
         localStorage.setItem(`open_jobs_${key}`, JSON.stringify(Array.from(set)));
+    },
+    
+    serialize() {
+        return {
+            saved: Array.from(this.saved),
+            applied: Array.from(this.applied),
+            ignored: Array.from(this.ignored)
+        };
     }
 };
 
 const DOM = {
-    // Top headers
     totalJobs: document.getElementById('stat-total-jobs'),
     resultsCount: document.getElementById('results-count'),
     lastUpdated: document.getElementById('stat-last-updated'),
     
-    // Search tabs & panel inputs
     tabFree: document.getElementById('tab-free'),
     tabStructured: document.getElementById('tab-structured'),
     panelFree: document.getElementById('search-free-panel'),
@@ -60,33 +64,61 @@ const DOM = {
     inputStructCompany: document.getElementById('input-struct-company'),
     inputStructLocation: document.getElementById('input-struct-location'),
     
-    // Active filters
     activeFiltersBox: document.getElementById('active-filters-box'),
     activeChips: document.getElementById('active-chips'),
     btnClearAll: document.getElementById('btn-clear-all'),
     
-    // Steppers
     btnCompMinus: document.getElementById('btn-comp-minus'),
     btnCompPlus: document.getElementById('btn-comp-plus'),
     compDisplay: document.getElementById('comp-display'),
     
-    // Toggles
     toggleHideRecruiters: document.getElementById('toggle-hide-recruiters'),
     toggleHideStale: document.getElementById('toggle-hide-stale'),
     toggleSavedOnly: document.getElementById('toggle-saved-only'),
     toggleAppliedOnly: document.getElementById('toggle-applied-only'),
     toggleShowIgnored: document.getElementById('toggle-show-ignored'),
     
-    // Ledger elements
     loader: document.getElementById('loader'),
     ledgerRows: document.getElementById('ledger-rows'),
     sortHeaders: document.querySelectorAll('.sort-header-col[data-sort]'),
     
-    // Pagination
     btnPrev: document.getElementById('btn-prev'),
     btnNext: document.getElementById('btn-next'),
-    pageIndicator: document.getElementById('page-indicator')
+    pageIndicator: document.getElementById('page-indicator'),
+    selectPageSize: document.getElementById('select-page-size')
 };
+
+// Web Worker Initialization
+const worker = new Worker('worker.js');
+
+worker.addEventListener('message', (e) => {
+    const { type } = e.data;
+    
+    if (type === 'INIT_START') {
+        DOM.totalJobs.textContent = e.data.total.toLocaleString();
+        const dateObj = new Date(e.data.lastUpdated);
+        DOM.lastUpdated.textContent = dateObj.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true });
+    } 
+    else if (type === 'INIT_DONE') {
+        if (!e.data.success) {
+            DOM.loader.innerHTML = '<span class="loader-pulse">■</span> ERROR LOAD FAILED';
+            return;
+        }
+        state.isLoading = false;
+        DOM.loader.classList.add('hidden');
+        DOM.ledgerRows.classList.remove('hidden');
+        rehydrateFromURL();
+        applyFilters();
+    }
+    else if (type === 'FILTER_DONE') {
+        DOM.resultsCount.textContent = e.data.totalResults.toLocaleString();
+        updateFacetDOMCounts(e.data.counts);
+        requestPage();
+    }
+    else if (type === 'PAGE_DATA') {
+        renderPageDOM(e.data.data, e.data.page, e.data.totalPages);
+    }
+});
 
 // --- Accordion Action Registration ---
 document.querySelectorAll('.accordion-header').forEach(header => {
@@ -154,26 +186,11 @@ function updateCompDisplay() {
 
 // --- Toggle Controls ---
 function setupToggles() {
-    DOM.toggleHideRecruiters.addEventListener('change', (e) => {
-        state.hideRecruiter = e.target.checked;
-        applyFilters();
-    });
-    DOM.toggleHideStale.addEventListener('change', (e) => {
-        state.hideStale = e.target.checked;
-        applyFilters();
-    });
-    DOM.toggleSavedOnly.addEventListener('change', (e) => {
-        state.savedOnly = e.target.checked;
-        applyFilters();
-    });
-    DOM.toggleAppliedOnly.addEventListener('change', (e) => {
-        state.appliedOnly = e.target.checked;
-        applyFilters();
-    });
-    DOM.toggleShowIgnored.addEventListener('change', (e) => {
-        state.showIgnored = e.target.checked;
-        applyFilters();
-    });
+    DOM.toggleHideRecruiters.addEventListener('change', (e) => { state.hideRecruiter = e.target.checked; applyFilters(); });
+    DOM.toggleHideStale.addEventListener('change', (e) => { state.hideStale = e.target.checked; applyFilters(); });
+    DOM.toggleSavedOnly.addEventListener('change', (e) => { state.savedOnly = e.target.checked; applyFilters(); });
+    DOM.toggleAppliedOnly.addEventListener('change', (e) => { state.appliedOnly = e.target.checked; applyFilters(); });
+    DOM.toggleShowIgnored.addEventListener('change', (e) => { state.showIgnored = e.target.checked; applyFilters(); });
 }
 
 // --- Checkboxes Setup ---
@@ -182,11 +199,10 @@ function setupCheckboxes() {
         cb.addEventListener('change', () => {
             const facet = cb.dataset.facet;
             const value = cb.value;
-            if (cb.checked) {
-                state[facet].add(value);
-            } else {
-                state[facet].delete(value);
-            }
+            const set = new Set(state[facet]);
+            if (cb.checked) set.add(value);
+            else set.delete(value);
+            state[facet] = Array.from(set);
             applyFilters();
         });
     });
@@ -204,7 +220,6 @@ function setupSorting() {
                 state.sortDir = 'asc';
             }
             
-            // Update Headers chevron indicators
             DOM.sortHeaders.forEach(h => {
                 h.classList.remove('active');
                 const chev = h.querySelector('.sort-chevron');
@@ -215,13 +230,22 @@ function setupSorting() {
             const chev = header.querySelector('.sort-chevron');
             if (chev) chev.textContent = state.sortDir === 'asc' ? '▲' : '▼';
             
-            renderPage();
+            applyFilters(); // Must re-filter to trigger sort in worker
         });
     });
 }
 
-// --- Init & Data Loader ---
-async function init() {
+// --- Page Size Control ---
+if (DOM.selectPageSize) {
+    DOM.selectPageSize.addEventListener('change', (e) => {
+        state.pageSize = parseInt(e.target.value, 10);
+        state.currentPage = 1;
+        applyFilters();
+    });
+}
+
+// --- Init ---
+function init() {
     setupSearchTabs();
     setupStepper();
     setupToggles();
@@ -230,20 +254,18 @@ async function init() {
     
     DOM.btnClearAll.addEventListener('click', clearAllFilters);
     
-    // Search debouncing setup
     let debounceTimer;
     const handleSearchInput = (e) => {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
-            if (e.target === DOM.inputFree) {
-                state.q = e.target.value;
-            } else {
+            if (e.target === DOM.inputFree) state.q = e.target.value;
+            else {
                 state.structTitle = DOM.inputStructTitle.value;
                 state.structCompany = DOM.inputStructCompany.value;
                 state.structLocation = DOM.inputStructLocation.value;
             }
             applyFilters();
-        }, 150);
+        }, 250); // Increased debounce to 250ms to prevent rapid-fire worker requests
     };
     
     DOM.inputFree.addEventListener('input', handleSearchInput);
@@ -251,284 +273,33 @@ async function init() {
     DOM.inputStructCompany.addEventListener('input', handleSearchInput);
     DOM.inputStructLocation.addEventListener('input', handleSearchInput);
     
-    try {
-        const manifestRes = await fetch('data/manifest.json');
-        if (!manifestRes.ok) throw new Error("Manifest not found.");
-        const manifest = await manifestRes.json();
-        
-        DOM.totalJobs.textContent = manifest.total_jobs.toLocaleString();
-        
-        const dateObj = new Date(manifest.updated_at_ist);
-        DOM.lastUpdated.textContent = dateObj.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true });
-
-        const chunks = manifest.chunks || [];
-        
-        const chunkPromises = chunks.map(async (chunk) => {
-            try {
-                const res = await fetch(`data/${chunk.file}`);
-                let json;
-                try {
-                    json = await res.clone().json();
-                } catch (err) {
-                    const ds = new DecompressionStream('gzip');
-                    const decompressedStream = res.body.pipeThrough(ds);
-                    const decompressedRes = new Response(decompressedStream);
-                    json = await decompressedRes.json();
-                }
-                return json;
-            } catch (e) {
-                console.error("Failed loading chunk:", chunk.file, e);
-                return [];
-            }
-        });
-        
-        const chunksData = await Promise.all(chunkPromises);
-        
-        let indexCounter = 0;
-        for (const chunk of chunksData) {
-            for (let i = 0; i < chunk.length; i++) {
-                const job = chunk[i];
-                job.inferredCategory = inferCategory(job.ti || '');
-                job.inferredLevel = inferLevel(job.ti || '', job.l || '');
-                
-                // Add rich dataset elements to map layout requirements
-                job.id = `${job.ti || ''}-${job.c || ''}-${indexCounter}`.replace(/\s+/g, '-').toLowerCase();
-                job.comp = 80000 + ((indexCounter * 17) % 15) * 10000; // Mock salary: $80k-$220k
-                job.isRecruiter = (indexCounter % 10 === 0) || (job.c || '').toLowerCase().match(/staffing|agency|group|recruiting|global/);
-                job.isVerified = (indexCounter % 8 !== 0);
-                
-                // Infer ATS
-                const url = (job.u || '').toLowerCase();
-                if (url.includes('greenhouse.io') || url.includes('boards.greenhouse.io')) {
-                    job.ats = 'greenhouse';
-                } else if (url.includes('lever.co')) {
-                    job.ats = 'lever';
-                } else if (url.includes('myworkdayjobs')) {
-                    job.ats = 'workday';
-                } else {
-                    job.ats = 'other';
-                }
-                
-                state.allJobs.push(job);
-                indexCounter++;
-            }
-        }
-        
-        state.isLoading = false;
-        DOM.loader.classList.add('hidden');
-        DOM.ledgerRows.classList.remove('hidden');
-        
-        // Rehydrate state from URL query params
-        rehydrateFromURL();
-        
-        applyFilters();
-
-    } catch (e) {
-        console.error(e);
-        DOM.loader.innerHTML = '<span class="loader-pulse">■</span> ERROR LOAD FAILED';
-    }
+    // Kickoff worker load
+    worker.postMessage({ type: 'INIT' });
 }
 
-// --- Category & Level Inference ---
-function inferCategory(title) {
-    title = title.toLowerCase();
-    if (title.match(/engineer|developer|architect|full stack|backend|frontend|ios|android/)) return 'engineering';
-    if (title.match(/data|machine learning|ml |ai |analytics|scientist/)) return 'data';
-    if (title.match(/product|design|ui\/ux|researcher/)) return 'product';
-    if (title.match(/sales|account|business development|marketing|growth|content/)) return 'sales';
-    if (title.match(/operations|hr |human resources|talent|recruiter|finance|legal/)) return 'operations';
-    return 'other';
-}
-
-function inferLevel(title, existingLevel) {
-    title = title.toLowerCase();
-    existingLevel = (existingLevel || '').toLowerCase();
-    
-    if (title.match(/intern|junior|entry|grad|associate|1|i\b/)) return 'entry';
-    if (title.match(/senior|sr\.|staff|principal|lead|head|manager|director|vp|chief/)) return 'senior';
-    if (title.match(/director|vp|head of|chief|president/)) return 'executive';
-    if (title.match(/mid|ii\b/)) return 'mid';
-    
-    if (existingLevel.includes('senior') || existingLevel.includes('lead')) return 'senior';
-    if (existingLevel.includes('junior') || existingLevel.includes('entry')) return 'entry';
-    if (existingLevel.includes('executive') || existingLevel.includes('director')) return 'executive';
-    
-    return 'mid';
-}
-
-// --- Prefix Parser ---
-function parseFreeQuery(query) {
-    const filters = {
-        title: '',
-        company: '',
-        location: '',
-        general: []
-    };
-    
-    // Match prefix mappings like title:"Software Engineer" or title:Staff
-    const pattern = /(?:(\w+):(?:(?:"([^"]+)")|(\S+)))/g;
-    let match;
-    let lastIndex = 0;
-    const cleanQuery = query;
-    
-    while ((match = pattern.exec(cleanQuery)) !== null) {
-        const key = match[1].toLowerCase();
-        const val = match[2] || match[3];
-        
-        if (key === 'title' || key === 't') filters.title = val.toLowerCase();
-        else if (key === 'company' || key === 'c') filters.company = val.toLowerCase();
-        else if (key === 'location' || key === 'l') filters.location = val.toLowerCase();
-        
-        // Grab non-matched text between matches
-        const segment = cleanQuery.slice(lastIndex, match.index).trim();
-        if (segment) {
-            filters.general.push(segment.toLowerCase());
-        }
-        lastIndex = pattern.lastIndex;
-    }
-    
-    const remaining = cleanQuery.slice(lastIndex).trim();
-    if (remaining) {
-        filters.general.push(remaining.toLowerCase());
-    }
-    
-    return filters;
-}
-
-// --- Filtering Engine & Facet Counts Intersections ---
+// --- Worker Communication Engine ---
 function applyFilters() {
     if (state.isLoading) return;
-    
-    // Core Array Filters
-    state.filteredJobs = state.allJobs.filter(job => {
-        return matchesJob(job, state);
-    });
-    
-    state.currentPage = 1;
-    DOM.resultsCount.textContent = state.filteredJobs.length.toLocaleString();
-    
-    // Render
+    state.currentPage = 1; // Reset to page 1 on new filter
     updateURL();
     renderActiveChips();
-    renderPage();
-    calculateFacetCounts();
+    worker.postMessage({ type: 'FILTER', payload: { state, storage: Storage.serialize() } });
 }
 
-// Helper to determine if a job matches state criteria
-function matchesJob(job, testState) {
-    const isIgnored = Storage.ignored.has(job.id);
-    
-    // Show ignored toggle evaluation
-    if (isIgnored && !testState.showIgnored) return false;
-    
-    // savedOnly & appliedOnly evaluations
-    if (testState.savedOnly && !Storage.saved.has(job.id)) return false;
-    if (testState.appliedOnly && !Storage.applied.has(job.id)) return false;
-    
-    // Recruiter & Stale boolean evaluations
-    if (testState.hideRecruiter && job.isRecruiter) return false;
-    if (testState.hideStale && !job.isVerified) return false;
-    
-    // Compensation bounds
-    if (job.comp < (testState.minComp * 1000)) return false;
-    
-    // Search input evaluations
-    if (testState.searchMode === 'free') {
-        if (testState.q.trim()) {
-            const parsed = parseFreeQuery(testState.q);
-            const title = (job.ti || '').toLowerCase();
-            const company = (job.c || '').toLowerCase();
-            const location = (job.loc || '').toLowerCase();
-            
-            if (parsed.title && !title.includes(parsed.title)) return false;
-            if (parsed.company && !company.includes(parsed.company)) return false;
-            if (parsed.location && !location.includes(parsed.location)) return false;
-            
-            // Check general terms
-            for (const term of parsed.general) {
-                if (!title.includes(term) && !company.includes(term) && !location.includes(term)) {
-                    return false;
-                }
-            }
-        }
-    } else {
-        // Structured inputs
-        const title = (job.ti || '').toLowerCase();
-        const company = (job.c || '').toLowerCase();
-        const location = (job.loc || '').toLowerCase();
-        
-        if (testState.structTitle && !title.includes(testState.structTitle.toLowerCase())) return false;
-        if (testState.structCompany && !company.includes(testState.structCompany.toLowerCase())) return false;
-        if (testState.structLocation && !location.includes(testState.structLocation.toLowerCase())) return false;
-    }
-    
-    // Workplace checks
-    if (testState.workplace.size > 0) {
-        const isRemote = job.w === 'remote' || (job.loc || '').toLowerCase().includes('remote');
-        const type = isRemote ? 'remote' : 'onsite';
-        if (!testState.workplace.has(type)) return false;
-    }
-    
-    // Level checks
-    if (testState.level.size > 0) {
-        if (!testState.level.has(job.inferredLevel)) return false;
-    }
-    
-    // ATS checks
-    if (testState.ats.size > 0) {
-        if (!testState.ats.has(job.ats)) return false;
-    }
-    
-    // Posted time checks
-    if (testState.posted.size > 0) {
-        const dateObj = job.ist_scraped_at ? new Date(job.ist_scraped_at) : new Date();
-        const diffDays = (new Date() - dateObj) / (1000 * 60 * 60 * 24);
-        
-        let matchedTime = false;
-        testState.posted.forEach(range => {
-            if (range === '24h' && diffDays <= 1) matchedTime = true;
-            if (range === '3d' && diffDays <= 3) matchedTime = true;
-            if (range === '7d' && diffDays <= 7) matchedTime = true;
-        });
-        if (!matchedTime) return false;
-    }
-    
-    return true;
+function requestPage() {
+    worker.postMessage({ type: 'GET_PAGE', payload: { page: state.currentPage, pageSize: state.pageSize } });
 }
 
-// --- Dynamic Facet Count Calculation ---
-function calculateFacetCounts() {
-    // Generate counts for workplace, level, ats, posted
-    const categories = ['workplace', 'level', 'ats', 'posted'];
-    
-    categories.forEach(facetCat => {
-        // Find all checkboxes in this facet category
+// --- UI Updaters ---
+function updateFacetDOMCounts(counts) {
+    ['workplace', 'level', 'ats', 'posted'].forEach(facetCat => {
         const cbs = document.querySelectorAll(`input[data-facet="${facetCat}"]`);
         cbs.forEach(cb => {
             const val = cb.value;
-            
-            // Build a temporary simulation state
-            const simState = {
-                ...state,
-                workplace: new Set(state.workplace),
-                level: new Set(state.level),
-                ats: new Set(state.ats),
-                posted: new Set(state.posted)
-            };
-            
-            // Isolate current calculation: force it to match simulated value
-            simState[facetCat] = new Set([val]);
-            
-            // Intersect all other active jobs
-            const count = state.allJobs.filter(job => matchesJob(job, simState)).length;
-            
-            // Update labels
+            const count = counts[facetCat][val] || 0;
             const countLabel = document.getElementById(`count-${facetCat}-${val}`);
-            if (countLabel) {
-                countLabel.textContent = count.toLocaleString();
-            }
+            if (countLabel) countLabel.textContent = count.toLocaleString();
             
-            // Disable checkbox if count is 0 and it isn't currently checked
             const rowLabel = cb.closest('.filter-checkbox-row');
             if (count === 0 && !cb.checked) {
                 rowLabel.classList.add('disabled');
@@ -541,15 +312,12 @@ function calculateFacetCounts() {
     });
 }
 
-// --- Active Chips strip ---
 function renderActiveChips() {
     DOM.activeChips.innerHTML = '';
     const activeList = [];
     
     ['workplace', 'level', 'ats', 'posted'].forEach(facet => {
-        state[facet].forEach(val => {
-            activeList.push({ facet, val });
-        });
+        state[facet].forEach(val => activeList.push({ facet, val }));
     });
     
     if (activeList.length > 0) {
@@ -559,7 +327,9 @@ function renderActiveChips() {
             chip.className = 'active-chip';
             chip.innerHTML = `${item.val.toUpperCase()} ✕`;
             chip.addEventListener('click', () => {
-                state[item.facet].delete(item.val);
+                const set = new Set(state[item.facet]);
+                set.delete(item.val);
+                state[item.facet] = Array.from(set);
                 const cb = document.querySelector(`input[data-facet="${item.facet}"][value="${item.val}"]`);
                 if (cb) cb.checked = false;
                 applyFilters();
@@ -583,15 +353,9 @@ function clearAllFilters() {
     DOM.inputStructCompany.value = '';
     DOM.inputStructLocation.value = '';
     
-    ['workplace', 'level', 'ats', 'posted'].forEach(facet => {
-        state[facet].clear();
-    });
+    ['workplace', 'level', 'ats', 'posted'].forEach(facet => state[facet] = []);
+    document.querySelectorAll('input[type="checkbox"][data-facet]').forEach(cb => cb.checked = false);
     
-    document.querySelectorAll('input[type="checkbox"][data-facet]').forEach(cb => {
-        cb.checked = false;
-    });
-    
-    // Reset Boolean Toggles
     state.hideRecruiter = false;
     state.hideStale = false;
     state.savedOnly = false;
@@ -608,66 +372,18 @@ function clearAllFilters() {
     applyFilters();
 }
 
-// --- Sorting Mechanics ---
-function getSortedJobs() {
-    return [...state.filteredJobs].sort((a, b) => {
-        let valA = '';
-        let valB = '';
-        
-        switch (state.sortBy) {
-            case 'role':
-                valA = (a.ti || '').toLowerCase();
-                valB = (b.ti || '').toLowerCase();
-                break;
-            case 'location':
-                valA = (a.loc || '').toLowerCase();
-                valB = (b.loc || '').toLowerCase();
-                break;
-            case 'level':
-                valA = (a.inferredLevel || '').toLowerCase();
-                valB = (b.inferredLevel || '').toLowerCase();
-                break;
-            case 'posted':
-                valA = a.ist_scraped_at ? new Date(a.ist_scraped_at) : new Date(0);
-                valB = b.ist_scraped_at ? new Date(b.ist_scraped_at) : new Date(0);
-                break;
-        }
-        
-        if (valA < valB) return state.sortDir === 'asc' ? -1 : 1;
-        if (valA > valB) return state.sortDir === 'asc' ? 1 : -1;
-        return 0;
-    });
-}
-
-// --- Render Layout Tabular Rows ---
-function renderPage() {
+function renderPageDOM(jobs, page, totalPages) {
     DOM.ledgerRows.innerHTML = '';
-    
-    const sorted = getSortedJobs();
-    const totalPages = Math.ceil(sorted.length / state.pageSize) || 1;
-    const startIndex = (state.currentPage - 1) * state.pageSize;
-    const endIndex = Math.min(startIndex + state.pageSize, sorted.length);
-    
     const fragment = document.createDocumentFragment();
     
-    for (let i = startIndex; i < endIndex; i++) {
-        const job = sorted[i];
-        
+    for (const job of jobs) {
         const isSaved = Storage.saved.has(job.id);
         const isApplied = Storage.applied.has(job.id);
         const isIgnored = Storage.ignored.has(job.id);
         
-        // Calculate Scraped Time Ago
-        const dateObj = job.ist_scraped_at ? new Date(job.ist_scraped_at) : new Date();
-        const diffDays = Math.floor((new Date() - dateObj) / (1000 * 60 * 60 * 24));
-        
-        // Badge Configurations
         let badgeHtml = '';
-        if (diffDays <= 1) {
-            badgeHtml += `<span class="ledger-badge badge-new">[NEW]</span>`;
-        } else if (!job.isVerified) {
-            badgeHtml += `<span class="ledger-badge badge-stale">[STALE]</span>`;
-        }
+        if (job.diffDays <= 1) badgeHtml += `<span class="ledger-badge badge-new">[NEW]</span>`;
+        else if (!job.isVerified) badgeHtml += `<span class="ledger-badge badge-stale">[STALE]</span>`;
         
         if (isSaved) badgeHtml += `<span class="ledger-badge badge-saved">[SAVED]</span>`;
         if (isApplied) badgeHtml += `<span class="ledger-badge badge-applied">[APPLIED]</span>`;
@@ -697,33 +413,26 @@ function renderPage() {
                 <span class="level-mono">${escapeHTML(job.inferredLevel)}</span>
             </div>
             <div class="ledger-cell">
-                <span class="posted-mono">${diffDays === 0 ? 'Today' : diffDays === 1 ? '1d ago' : `${diffDays}d ago`}</span>
+                <span class="posted-mono">${job.diffDays === 0 ? 'Today' : job.diffDays === 1 ? '1d ago' : `${job.diffDays}d ago`}</span>
             </div>
             <div class="ledger-cell actions-cell">
-                <!-- Save toggle glyph -->
                 <button class="action-btn-glyph btn-glyph-save ${isSaved ? 'active' : ''}" title="Save Role">
                     ${isSaved ? '★' : '☆'}
                 </button>
-                <!-- Apply direct link -->
                 <a href="${job.u || '#'}" target="_blank" rel="noopener noreferrer" class="action-btn-glyph btn-glyph-apply" title="Apply Externally">
                     ↗
                 </a>
-                <!-- Ignore toggle glyph -->
-                <button class="action-btn-glyph btn-glyph-ignore ${isIgnored ? 'active' : ''}" title="Ignore Role">
-                    ${isIgnored ? '✖' : '☐'}
+                <button class="action-btn-glyph btn-glyph-ignore ${isIgnored ? 'active' : ''}" title="Remove/Ignore Role" style="font-size: 1.1em; line-height: 1;">
+                    ${isIgnored ? '↺' : '✕'}
                 </button>
             </div>
         `;
         
-        // Attach Action Click Listeners
         const btnSave = row.querySelector('.btn-glyph-save');
         btnSave.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (Storage.saved.has(job.id)) {
-                Storage.saved.delete(job.id);
-            } else {
-                Storage.saved.add(job.id);
-            }
+            if (Storage.saved.has(job.id)) Storage.saved.delete(job.id);
+            else Storage.saved.add(job.id);
             Storage.save('saved', Storage.saved);
             applyFilters();
         });
@@ -731,21 +440,17 @@ function renderPage() {
         const btnIgnore = row.querySelector('.btn-glyph-ignore');
         btnIgnore.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (Storage.ignored.has(job.id)) {
-                Storage.ignored.delete(job.id);
-            } else {
-                Storage.ignored.add(job.id);
-            }
+            if (Storage.ignored.has(job.id)) Storage.ignored.delete(job.id);
+            else Storage.ignored.add(job.id);
             Storage.save('ignored', Storage.ignored);
             applyFilters();
         });
         
-        // Simulating Apply Click
         const btnApply = row.querySelector('.btn-glyph-apply');
         btnApply.addEventListener('click', () => {
             Storage.applied.add(job.id);
             Storage.save('applied', Storage.applied);
-            setTimeout(applyFilters, 500); // Trigger redraw slightly after opening window
+            setTimeout(applyFilters, 500);
         });
         
         fragment.appendChild(row);
@@ -753,10 +458,9 @@ function renderPage() {
     
     DOM.ledgerRows.appendChild(fragment);
     
-    // Page state rendering
-    DOM.pageIndicator.textContent = `${String(state.currentPage).padStart(2, '0')} / ${String(totalPages).padStart(2, '0')}`;
-    DOM.btnPrev.disabled = state.currentPage === 1;
-    DOM.btnNext.disabled = state.currentPage === totalPages;
+    DOM.pageIndicator.textContent = `${String(page).padStart(2, '0')} / ${String(totalPages).padStart(2, '0')}`;
+    DOM.btnPrev.disabled = page === 1;
+    DOM.btnNext.disabled = page === totalPages || totalPages === 0;
 }
 
 function escapeHTML(str) {
@@ -769,7 +473,6 @@ function escapeHTML(str) {
         .replace(/'/g, '&#039;');
 }
 
-// --- Query String Syncing Logic ---
 function updateURL() {
     const params = new URLSearchParams();
     
@@ -782,24 +485,18 @@ function updateURL() {
     }
     
     params.set('mode', state.searchMode);
-    
     if (state.minComp > 0) params.set('comp', state.minComp);
     
-    // Add Sets
     ['workplace', 'level', 'ats', 'posted'].forEach(facet => {
-        if (state[facet].size > 0) {
-            params.set(facet, Array.from(state[facet]).join(','));
-        }
+        if (state[facet].length > 0) params.set(facet, state[facet].join(','));
     });
     
-    // Toggles
     if (state.hideRecruiter) params.set('no_rec', '1');
     if (state.hideStale) params.set('verified', '1');
     if (state.savedOnly) params.set('saved', '1');
     if (state.appliedOnly) params.set('applied', '1');
     if (state.showIgnored) params.set('show_ign', '1');
     
-    // Sort
     params.set('sort', state.sortBy);
     params.set('dir', state.sortDir);
     
@@ -828,7 +525,7 @@ function rehydrateFromURL() {
         DOM.tabStructured.classList.add('active');
         DOM.tabFree.classList.remove('active');
         DOM.panelStructured.classList.add('active');
-        DOM.panelFree.classList.add('active'); // Keep panels in sync
+        DOM.panelFree.classList.add('active'); 
     }
     
     state.minComp = parseInt(params.get('comp') || '0', 10);
@@ -837,8 +534,8 @@ function rehydrateFromURL() {
     ['workplace', 'level', 'ats', 'posted'].forEach(facet => {
         const val = params.get(facet);
         if (val) {
-            val.split(',').forEach(item => {
-                state[facet].add(item);
+            state[facet] = val.split(',');
+            state[facet].forEach(item => {
                 const cb = document.querySelector(`input[data-facet="${facet}"][value="${item}"]`);
                 if (cb) cb.checked = true;
             });
@@ -876,23 +573,18 @@ function rehydrateFromURL() {
     });
 }
 
-// --- Pagination Actions ---
 DOM.btnPrev.addEventListener('click', () => {
     if (state.currentPage > 1) {
         state.currentPage--;
-        renderPage();
+        requestPage();
         window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 });
 
 DOM.btnNext.addEventListener('click', () => {
-    const sorted = getSortedJobs();
-    const totalPages = Math.ceil(sorted.length / state.pageSize);
-    if (state.currentPage < totalPages) {
-        state.currentPage++;
-        renderPage();
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
+    state.currentPage++;
+    requestPage();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 
 init();

@@ -1,4 +1,18 @@
-
 # Data Inputs Cache
 ts_inputs/
 py_inputs/
+
+# Environments and Modules
+node_modules/
+venv/
+.venv/
+env/
+.env
+
+# Python Caches
+__pycache__/
+*.pyc
+
+# Local Data / Temporary Files
+scratch/
+ui/data/
